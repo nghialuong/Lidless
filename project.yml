@@ -18,6 +18,7 @@ targets:
     sources:
       - Sources/Lidless
       - Sources/Shared
+      - Resources/Assets.xcassets
       - path: Resources/com.nghialuong.lidless.helper.plist
         buildPhase:
           copyFiles:
@@ -31,6 +32,7 @@ targets:
         CFBundleDisplayName: Lidless
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
+        CFBundleIconName: AppIcon
         LSMinimumSystemVersion: "13.0"
         NSHumanReadableCopyright: "© 2026 Nghia Luong"
     settings:
@@ -39,6 +41,7 @@ targets:
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         ENABLE_HARDENED_RUNTIME: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     dependencies:
       - target: LidlessHelper
         copy:

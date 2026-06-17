@@ -15,15 +15,25 @@ final class AppState: ObservableObject {
     /// User-tunable safety preferences (persisted).
     @Published var settings: SafetySettings = .default
 
+    /// Launch-at-login state (the app itself).
+    @Published var launchAtLogin = false
+
     private let helper = HelperManager()
     private let fallback = PowerManager()
     private let battery = BatteryMonitor()
     private let store = SettingsStore()
+    private let loginItem = LoginItemManager()
+
+    /// Marketing version shown in the menu.
+    var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
+    }
     private var batteryTimer: Timer?
     private var heartbeatTimer: Timer?
 
     init() {
         settings = store.load()
+        launchAtLogin = loginItem.isEnabled
         refreshHelperStatus()
         refreshState()
         refreshBattery()
@@ -38,6 +48,16 @@ final class AppState: ObservableObject {
         settings = new
         store.save(new)
         evaluateSafety()
+    }
+
+    func setLaunchAtLogin(_ enabled: Bool) {
+        if let err = loginItem.setEnabled(enabled) {
+            lastError = err
+            launchAtLogin = loginItem.isEnabled
+        } else {
+            // status can lag right after register/unregister; trust the action.
+            launchAtLogin = enabled
+        }
     }
 
     private func thermalSerious() -> Bool {
