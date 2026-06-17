@@ -23,7 +23,25 @@ struct MenuContent: View {
 
             Divider()
 
-            HStack {
+            // Helper / mode row
+            HStack(spacing: 6) {
+                Image(systemName: state.usingHelper ? "checkmark.shield.fill" : "exclamationmark.shield")
+                    .foregroundStyle(state.usingHelper ? .green : .orange)
+                Text(state.usingHelper
+                     ? "Background helper active"
+                     : "Using admin prompt (no helper)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if !state.helperInstalled {
+                Button(state.helperNeedsApproval ? "Open Login Items to approve" : "Install background helper") {
+                    state.installHelper()
+                }
+                .font(.caption)
+            }
+
+            HStack(spacing: 6) {
                 Image(systemName: "battery.100")
                     .foregroundStyle(.secondary)
                 Text(state.batteryDescription)
@@ -46,6 +64,6 @@ struct MenuContent: View {
             }
         }
         .padding(12)
-        .frame(width: 260)
+        .frame(width: 270)
     }
 }

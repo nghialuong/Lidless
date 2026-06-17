@@ -13,13 +13,7 @@ struct PowerManager {
     /// Read the current `SleepDisabled` flag from `pmset -g`.
     func isSleepDisabled() -> Bool {
         guard let out = Shell.capture("/usr/bin/pmset", ["-g"]) else { return false }
-        for rawLine in out.split(separator: "\n") {
-            let line = rawLine.lowercased()
-            if line.contains("sleepdisabled") {
-                return line.contains(" 1")
-            }
-        }
-        return false
+        return PowerParsers.isSleepDisabled(pmsetG: out)
     }
 
     /// Set or clear the flag. Throws with the underlying error message on failure

@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: brew install xcodegen xcbeautify
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build & test
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -scheme Lidless-CI \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcbeautify
