@@ -71,6 +71,14 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
 
 schemes:
+  Lidless:
+    build:
+      targets:
+        Lidless: all
+    run:
+      config: Debug
+    archive:
+      config: Release
   Lidless-CI:
     build:
       targets:
