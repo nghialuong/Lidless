@@ -50,6 +50,46 @@ struct MenuContent: View {
                 Spacer()
             }
 
+            Divider()
+
+            Text("Safety")
+                .font(.caption.bold())
+                .foregroundStyle(.secondary)
+
+            Toggle("Only while charging", isOn: Binding(
+                get: { state.settings.onlyWhileCharging },
+                set: { newValue in
+                    var s = state.settings
+                    s.onlyWhileCharging = newValue
+                    state.updateSettings(s)
+                }
+            ))
+            .toggleStyle(.checkbox)
+            .font(.caption)
+
+            Toggle("Pause when running hot", isOn: Binding(
+                get: { state.settings.pauseOnHighThermal },
+                set: { newValue in
+                    var s = state.settings
+                    s.pauseOnHighThermal = newValue
+                    state.updateSettings(s)
+                }
+            ))
+            .toggleStyle(.checkbox)
+            .font(.caption)
+
+            Stepper(value: Binding(
+                get: { state.settings.lowBatteryThreshold },
+                set: { newValue in
+                    var s = state.settings
+                    s.lowBatteryThreshold = newValue
+                    state.updateSettings(s)
+                }
+            ), in: 5...50, step: 5) {
+                Text("Low-battery cutoff: \(state.settings.lowBatteryThreshold)%")
+                    .font(.caption)
+            }
+
             if let err = state.lastError {
                 Text(err)
                     .font(.caption)

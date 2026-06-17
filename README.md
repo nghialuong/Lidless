@@ -17,7 +17,8 @@ is the `SleepDisabled` flag in `IOPMrootDomain` (what `sudo pmset -a disableslee
   admin prompt (`osascript ... with administrator privileges`).
 - **M1.5 (next):** privileged helper via `SMAppService` + XPC → password-less, with a
   heartbeat watchdog that auto-clears the flag if the app dies (never get stuck awake).
-- **M2:** safety guards — low-battery auto-disable, "only while charging", thermal note.
+- **M2 (in progress):** safety guards — low-battery auto-disable, "only while charging",
+  thermal auto-pause, persisted preferences. Remaining: app icon + onboarding polish.
 
 ## Build
 
