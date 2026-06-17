@@ -4,12 +4,25 @@ options:
   deploymentTarget:
     macOS: "13.0"
   createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    DEVELOPMENT_TEAM: TAFDRXJZSR
+    CODE_SIGN_STYLE: Automatic
+
 targets:
   Lidless:
     type: application
     platform: macOS
     sources:
       - Sources/Lidless
+      - Sources/Shared
+      - path: Resources/com.nghialuong.lidless.helper.plist
+        buildPhase:
+          copyFiles:
+            destination: wrapper
+            subpath: Contents/Library/LaunchDaemons
     info:
       path: Sources/Lidless/Info.plist
       properties:
@@ -25,7 +38,42 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.nghialuong.lidless
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
-        SWIFT_VERSION: "5.0"
         ENABLE_HARDENED_RUNTIME: YES
-        CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: TAFDRXJZSR
+    dependencies:
+      - target: LidlessHelper
+        copy:
+          destination: executables
+
+  LidlessHelper:
+    type: tool
+    platform: macOS
+    sources:
+      - Sources/Helper
+      - Sources/Shared
+    settings:
+      base:
+        PRODUCT_NAME: LidlessHelper
+        PRODUCT_BUNDLE_IDENTIFIER: com.nghialuong.lidless.helper
+        ENABLE_HARDENED_RUNTIME: YES
+
+  LidlessTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/LidlessTests
+      - Sources/Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.nghialuong.lidlessTests
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  Lidless-CI:
+    build:
+      targets:
+        Lidless: all
+        LidlessHelper: all
+        LidlessTests: [test]
+    test:
+      targets:
+        - LidlessTests
