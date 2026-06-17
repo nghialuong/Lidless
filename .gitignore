@@ -1,0 +1,17 @@
+# Generated Xcode project (source of truth is project.yml — run `xcodegen generate`)
+*.xcodeproj
+
+# Build output
+build/
+DerivedData/
+.build/
+
+# Xcode user state
+xcuserdata/
+*.xcuserstate
+
+# macOS
+.DS_Store
+
+# SwiftPM
+.swiftpm/

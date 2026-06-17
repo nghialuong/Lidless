@@ -1,0 +1,31 @@
+name: Lidless
+options:
+  bundleIdPrefix: com.nghialuong
+  deploymentTarget:
+    macOS: "13.0"
+  createIntermediateGroups: true
+targets:
+  Lidless:
+    type: application
+    platform: macOS
+    sources:
+      - Sources/Lidless
+    info:
+      path: Sources/Lidless/Info.plist
+      properties:
+        LSUIElement: true
+        CFBundleName: Lidless
+        CFBundleDisplayName: Lidless
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        LSMinimumSystemVersion: "13.0"
+        NSHumanReadableCopyright: "© 2026 Nghia Luong"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.nghialuong.lidless
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: TAFDRXJZSR
