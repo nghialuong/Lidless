@@ -15,3 +15,7 @@ xcuserdata/
 
 # SwiftPM
 .swiftpm/
+
+# Sparkle release signing workspace (DMGs live on GitHub Releases; only the
+# generated docs/appcast.xml is committed and served via Pages)
+updates/

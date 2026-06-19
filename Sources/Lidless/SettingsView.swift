@@ -5,6 +5,7 @@ import SwiftUI
 /// background-helper setup, the auto-off timer, and About/GitHub.
 struct SettingsView: View {
     @EnvironmentObject var state: AppState
+    @EnvironmentObject var updater: UpdaterController
 
     private let repoURL = URL(string: "https://github.com/nghialuong/Lidless")!
 
@@ -53,6 +54,12 @@ struct SettingsView: View {
                     LabeledContent("Turning off in", value: state.autoOffRemaining)
                         .foregroundStyle(.secondary)
                 }
+            }
+
+            Section("Updates") {
+                Toggle("Check for updates automatically", isOn: $updater.automaticallyChecksForUpdates)
+                Button("Check for Updates…") { updater.checkForUpdates() }
+                    .disabled(!updater.canCheckForUpdates)
             }
 
             Section("About") {

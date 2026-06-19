@@ -21,12 +21,20 @@
 	<key>CFBundleShortVersionString</key>
 	<string>0.1.0</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 Nghia Luong</string>
+	<key>SUFeedURL</key>
+	<string>https://nghialuong.github.io/Lidless/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>REPLACE_WITH_BASE64_ED_PUBLIC_KEY</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
 </dict>
 </plist>
