@@ -12,5 +12,10 @@ struct LidlessApp: App {
             Image(systemName: state.isEnabled ? "bolt.fill" : "bolt.slash.fill")
         }
         .menuBarExtraStyle(.window)
+
+        Settings {
+            SettingsView()
+                .environmentObject(state)
+        }
     }
 }
