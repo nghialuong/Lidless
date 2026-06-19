@@ -1,5 +1,9 @@
 import SwiftUI
 
+/// Shared horizontal inset so every row, divider, and the footer line up on the
+/// same leading/trailing columns.
+private let hInset: CGFloat = 20
+
 /// The menu bar popover — "Minimal Quick Toggle".
 ///
 /// Keeps only the essentials: the primary keep-awake switch, a compact status
@@ -9,38 +13,81 @@ struct MenuContent: View {
     @EnvironmentObject var state: AppState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 6) {
-                PopoverHeader()
-                Text("Keep your Mac awake when the lid is closed.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+        VStack(alignment: .leading, spacing: 0) {
+            PopoverHeader()
+                .padding(.horizontal, hInset)
+                .padding(.top, 18)
 
-            PrimaryToggleRow()
+            Text("Keep your Mac awake when the lid is closed.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, hInset)
+                .padding(.top, 8)
 
             Divider()
+                .padding(.horizontal, hInset)
+                .padding(.top, 14)
+
+            PrimaryToggleRow()
+                .padding(.horizontal, hInset)
+
+            Divider()
+                .padding(.horizontal, hInset)
 
             StatusStrip()
+                .padding(.horizontal, hInset)
+                .padding(.vertical, 10)
 
             if let err = state.lastError {
                 Label(err, systemImage: "info.circle")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, hInset)
+                    .padding(.bottom, 10)
             }
 
             Divider()
+                .padding(.horizontal, hInset)
 
             SafetySection()
+                .padding(.horizontal, hInset)
+                .padding(.top, 12)
 
             Divider()
+                .padding(.horizontal, hInset)
+                .padding(.top, 12)
 
             FooterActions()
+                .padding(.horizontal, hInset)
+                .padding(.bottom, 14)
         }
-        .padding(20)
         .frame(width: 360)
+    }
+}
+
+// MARK: - Reusable row
+
+/// A native settings-style row: leading label, flexible gap, trailing control
+/// pinned to the shared right edge. Used for the primary toggle and every
+/// safety row so all controls share one trailing column.
+private struct SettingRow<Trailing: View>: View {
+    let title: String
+    var titleFont: Font = .callout
+    var minHeight: CGFloat = 36
+    @ViewBuilder var trailing: () -> Trailing
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(title)
+                .font(titleFont)
+                .lineLimit(1)
+            Spacer(minLength: 16)
+            trailing()
+                .fixedSize()
+        }
+        .frame(minHeight: minHeight)
     }
 }
 
@@ -54,7 +101,7 @@ private struct PopoverHeader: View {
             Text("Lidless").font(.headline)
             Spacer()
             Text("v\(state.appVersion)")
-                .font(.caption)
+                .font(.callout)
                 .foregroundStyle(.secondary)
         }
     }
@@ -67,16 +114,18 @@ private struct PrimaryToggleRow: View {
     @EnvironmentObject var state: AppState
 
     var body: some View {
-        Toggle(isOn: Binding(
-            get: { state.isEnabled },
-            set: { _ in state.toggle() }
-        )) {
-            Text("Keep awake with lid closed")
-                .font(.body.weight(.medium))
+        SettingRow(title: "Keep awake with lid closed",
+                   titleFont: .body.weight(.semibold),
+                   minHeight: 42) {
+            Toggle("Keep awake with lid closed", isOn: Binding(
+                get: { state.isEnabled },
+                set: { _ in state.toggle() }
+            ))
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.regular)
+            .tint(.accentColor)
         }
-        .toggleStyle(.switch)
-        .controlSize(.large)
-        .tint(.accentColor)
     }
 }
 
@@ -87,36 +136,34 @@ private struct StatusStrip: View {
     @EnvironmentObject var state: AppState
 
     var body: some View {
-        HStack(spacing: 16) {
-            HStack(spacing: 5) {
+        HStack(spacing: 12) {
+            HStack(spacing: 6) {
                 Image(systemName: state.usingHelper ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
                     .foregroundStyle(state.usingHelper ? .green : .orange)
                 Text(state.usingHelper ? "Helper active" : "Helper inactive")
-                    .foregroundStyle(.secondary)
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel(state.usingHelper ? "Background helper active" : "Background helper inactive")
 
-            Spacer()
+            Spacer(minLength: 12)
 
-            HStack(spacing: 5) {
+            HStack(spacing: 6) {
                 Image(systemName: batterySymbol)
-                    .foregroundStyle(.secondary)
                 Text("Battery \(state.batteryPercent)%")
-                    .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Battery \(state.batteryPercent) percent\(state.batteryOnAC ? ", on power" : "")")
         }
         .font(.callout)
+        .foregroundStyle(.secondary)
     }
 
     /// Closest native battery glyph for the current charge (names available on
     /// macOS 13+).
     private var batterySymbol: String {
         switch state.batteryPercent {
-        case 88...:  return "battery.100"
+        case 88...:   return "battery.100"
         case 63..<88: return "battery.75"
         case 38..<63: return "battery.50"
         case 13..<38: return "battery.25"
@@ -131,33 +178,43 @@ private struct SafetySection: View {
     @EnvironmentObject var state: AppState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
             Text("Safety")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.secondary)
+                .padding(.bottom, 2)
 
-            Toggle("Only while charging", isOn: Binding(
-                get: { state.settings.onlyWhileCharging },
-                set: { v in var s = state.settings; s.onlyWhileCharging = v; state.updateSettings(s) }
-            ))
-            .toggleStyle(.switch)
+            SettingRow(title: "Only while charging") {
+                Toggle("Only while charging", isOn: Binding(
+                    get: { state.settings.onlyWhileCharging },
+                    set: { v in var s = state.settings; s.onlyWhileCharging = v; state.updateSettings(s) }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+            }
 
-            Toggle("Pause when running hot", isOn: Binding(
-                get: { state.settings.pauseOnHighThermal },
-                set: { v in var s = state.settings; s.pauseOnHighThermal = v; state.updateSettings(s) }
-            ))
-            .toggleStyle(.switch)
+            SettingRow(title: "Pause when running hot") {
+                Toggle("Pause when running hot", isOn: Binding(
+                    get: { state.settings.pauseOnHighThermal },
+                    set: { v in var s = state.settings; s.pauseOnHighThermal = v; state.updateSettings(s) }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+            }
 
-            Stepper(value: Binding(
-                get: { state.settings.lowBatteryThreshold },
-                set: { v in var s = state.settings; s.lowBatteryThreshold = v; state.updateSettings(s) }
-            ), in: 5...50, step: 5) {
-                HStack {
-                    Text("Low-battery cutoff")
-                    Spacer()
+            SettingRow(title: "Low-battery cutoff") {
+                HStack(spacing: 6) {
                     Text("\(state.settings.lowBatteryThreshold)%")
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
+                    Stepper("Low-battery cutoff", value: Binding(
+                        get: { state.settings.lowBatteryThreshold },
+                        set: { v in var s = state.settings; s.lowBatteryThreshold = v; state.updateSettings(s) }
+                    ), in: 5...50, step: 5)
+                    .labelsHidden()
+                    .controlSize(.small)
                 }
             }
         }
@@ -175,11 +232,13 @@ private struct FooterActions: View {
                 NSApplication.shared.terminate(nil)
             } label: {
                 Label("Quit Lidless", systemImage: "power")
+                    .foregroundStyle(.secondary)
             }
             .keyboardShortcut("q")
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(.plain)
         .font(.callout)
+        .frame(minHeight: 36)
     }
 }
 
@@ -190,6 +249,7 @@ private struct SettingsButton: View {
         if #available(macOS 14.0, *) {
             SettingsLink {
                 Label("Settings…", systemImage: "gearshape")
+                    .foregroundStyle(.secondary)
             }
             .keyboardShortcut(",", modifiers: .command)
         } else {
@@ -198,6 +258,7 @@ private struct SettingsButton: View {
                 NSApp.activate(ignoringOtherApps: true)
             } label: {
                 Label("Settings…", systemImage: "gearshape")
+                    .foregroundStyle(.secondary)
             }
             .keyboardShortcut(",", modifiers: .command)
         }
