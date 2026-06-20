@@ -69,6 +69,12 @@ targets:
         PRODUCT_NAME: LidlessHelper
         PRODUCT_BUNDLE_IDENTIFIER: com.nghialuong.lidless.helper
         ENABLE_HARDENED_RUNTIME: YES
+        # The helper is embedded into the app bundle via the Lidless target's
+        # `copy: executables` dependency. Without this, the tool target is also
+        # installed to Products/usr/local/bin in the archive, leaving two install
+        # products so Xcode writes no ApplicationProperties — which makes
+        # `xcodebuild -exportArchive` reject every distribution method.
+        SKIP_INSTALL: YES
 
   LidlessTests:
     type: bundle.unit-test
