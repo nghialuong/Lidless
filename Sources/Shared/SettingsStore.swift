@@ -12,6 +12,7 @@ public struct SettingsStore {
         static let seeded       = "settingsSeeded"
         static let autoOff      = "autoOffMinutes"
         static let onboarded    = "onboardingComplete"
+        static let resumeOnboarding = "resumeOnboarding"
     }
 
     public init(defaults: UserDefaults = .standard) {
@@ -50,5 +51,16 @@ public struct SettingsStore {
 
     public func saveOnboardingComplete(_ complete: Bool) {
         defaults.set(complete, forKey: Key.onboarded)
+    }
+
+    /// Whether onboarding should be re-shown on the next launch — set when the app
+    /// relaunches itself mid-onboarding (after the helper is enabled) so the flow
+    /// resumes instead of being lost. Defaults to false.
+    public func loadResumeOnboarding() -> Bool {
+        defaults.bool(forKey: Key.resumeOnboarding)
+    }
+
+    public func saveResumeOnboarding(_ resume: Bool) {
+        defaults.set(resume, forKey: Key.resumeOnboarding)
     }
 }

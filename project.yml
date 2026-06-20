@@ -24,11 +24,6 @@ targets:
       - Sources/Lidless
       - Sources/Shared
       - Resources/Assets.xcassets
-      - path: Resources/com.nghialuong.lidless.helper.plist
-        buildPhase:
-          copyFiles:
-            destination: wrapper
-            subpath: Contents/Library/LaunchDaemons
     info:
       path: Sources/Lidless/Info.plist
       properties:
@@ -46,17 +41,48 @@ targets:
         SUScheduledCheckInterval: 86400
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.nghialuong.lidless
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         ENABLE_HARDENED_RUNTIME: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+      configs:
+        # Debug builds get a `.dev` bundle id so a dev build coexists with the
+        # released app — separate UserDefaults, login item, and helper daemon.
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: com.nghialuong.lidless.dev
+        Release:
+          PRODUCT_BUNDLE_IDENTIFIER: com.nghialuong.lidless
     dependencies:
       - target: LidlessHelper
         copy:
           destination: executables
       - package: Sparkle
         product: Sparkle
+    postBuildScripts:
+      # Generate the privileged helper's LaunchDaemon plist from the app's bundle
+      # id so the Release and `.dev` builds register isolated daemons. Runs before
+      # the app is code-signed, so the plist is sealed into the bundle.
+      - name: Generate helper LaunchDaemon plist
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          APP_ID="${PRODUCT_BUNDLE_IDENTIFIER}"
+          HELPER_ID="${APP_ID}.helper"
+          DEST="${CODESIGNING_FOLDER_PATH}/Contents/Library/LaunchDaemons"
+          mkdir -p "$DEST"
+          PLIST="${DEST}/${HELPER_ID}.plist"
+          printf '%s' '<?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>Label</key><string>'"${HELPER_ID}"'</string>
+              <key>BundleProgram</key><string>Contents/MacOS/LidlessHelper</string>
+              <key>MachServices</key><dict><key>'"${HELPER_ID}"'</key><true/></dict>
+              <key>AssociatedBundleIdentifiers</key><array><string>'"${APP_ID}"'</string></array>
+              <key>EnvironmentVariables</key><dict><key>LIDLESS_MACH_LABEL</key><string>'"${HELPER_ID}"'</string></dict>
+          </dict>
+          </plist>' > "$PLIST"
+          plutil -lint "$PLIST"
 
   LidlessHelper:
     type: tool
@@ -67,7 +93,6 @@ targets:
     settings:
       base:
         PRODUCT_NAME: LidlessHelper
-        PRODUCT_BUNDLE_IDENTIFIER: com.nghialuong.lidless.helper
         ENABLE_HARDENED_RUNTIME: YES
         # The helper is embedded into the app bundle via the Lidless target's
         # `copy: executables` dependency. Without this, the tool target is also
@@ -75,6 +100,12 @@ targets:
         # products so Xcode writes no ApplicationProperties — which makes
         # `xcodebuild -exportArchive` reject every distribution method.
         SKIP_INSTALL: YES
+      configs:
+        # Helper bundle id tracks the app's (`<app id>.helper`) per build config.
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: com.nghialuong.lidless.dev.helper
+        Release:
+          PRODUCT_BUNDLE_IDENTIFIER: com.nghialuong.lidless.helper
 
   LidlessTests:
     type: bundle.unit-test

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import Foundation
 
@@ -48,24 +49,48 @@ final class AppState: ObservableObject {
     private var heartbeatTimer: Timer?
     private var autoOffTimer: Timer?
 
+    /// Last-known "helper is usable" value, so we can detect it flipping on at
+    /// runtime (right after the user approves it) and prompt a restart.
+    private var helperWasUsable = false
+    /// True while the onboarding window is open and not yet completed.
+    private var onboardingActive = false
+    private var didBecomeActiveObserver: NSObjectProtocol?
+
     init() {
         settings = store.load()
         autoOffMinutes = store.loadAutoOffMinutes()
         onboardingComplete = store.loadOnboardingComplete()
         launchAtLogin = loginItem.isEnabled
         refreshHelperStatus()
+        helperWasUsable = usingHelper
         refreshState()
         refreshBattery()
         batteryTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
-        // First launch: show onboarding once. Persist the flag now so closing it
-        // early won't re-nag on the next launch. Present on the next runloop tick
-        // so the app is fully up before we open a window.
-        if !onboardingComplete {
+        // Re-check the helper whenever the app comes forward — e.g. when the user
+        // returns from approving it in System Settings — so we notice it being
+        // enabled without requiring a manual restart.
+        didBecomeActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.recheckHelper() }
+        }
+        // First launch shows onboarding once (persisted so closing it early won't
+        // re-nag). A relaunch triggered mid-onboarding resumes the flow instead.
+        if store.loadResumeOnboarding() {
+            store.saveResumeOnboarding(false)
+            DispatchQueue.main.async { [weak self] in self?.showOnboarding() }
+        } else if !onboardingComplete {
             onboardingComplete = true
             store.saveOnboardingComplete(true)
             DispatchQueue.main.async { [weak self] in self?.showOnboarding() }
+        }
+    }
+
+    deinit {
+        if let didBecomeActiveObserver {
+            NotificationCenter.default.removeObserver(didBecomeActiveObserver)
         }
     }
 
@@ -73,13 +98,16 @@ final class AppState: ObservableObject {
 
     /// Present the first-run setup window (also reachable from Settings).
     func showOnboarding() {
+        onboardingActive = true
         onboarding.show()
     }
 
     /// Mark onboarding done, persist it, and close the window.
     func completeOnboarding() {
+        onboardingActive = false
         onboardingComplete = true
         store.saveOnboardingComplete(true)
+        store.saveResumeOnboarding(false)
         onboarding.close()
     }
 
@@ -135,6 +163,46 @@ final class AppState: ObservableObject {
         usingHelper = helperInstalled
     }
 
+    /// Re-read helper status; if it just became usable (the user approved it while
+    /// the app was running), pick up its keep-awake state and prompt a restart so
+    /// the app fully switches onto the privileged helper.
+    func recheckHelper() {
+        let wasUsable = helperWasUsable
+        refreshHelperStatus()
+        helperWasUsable = usingHelper
+        guard !wasUsable, usingHelper else { return }
+        refreshState()
+        promptRestartAfterHelperEnabled()
+    }
+
+    /// Tell the user the helper is now active and offer to relaunch. The privileged
+    /// XPC connection is most reliable from a fresh launch, so a restart is the
+    /// simplest way to finish setup.
+    private func promptRestartAfterHelperEnabled() {
+        // If this happened mid-onboarding, resume the flow after the relaunch.
+        if onboardingActive { store.saveResumeOnboarding(true) }
+
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Background helper enabled"
+        alert.informativeText = "Restart Lidless to finish connecting to the background helper."
+        alert.addButton(withTitle: "Restart Now")
+        alert.addButton(withTitle: "Later")
+        if alert.runModal() == .alertFirstButtonReturn {
+            relaunch()
+        }
+    }
+
+    /// Spawn a fresh instance of the app, then terminate this one.
+    private func relaunch() {
+        let config = NSWorkspace.OpenConfiguration()
+        config.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: config) { _, _ in }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            NSApp.terminate(nil)
+        }
+    }
+
     func installHelper() {
         // If the daemon is already registered and just awaiting approval, don't
         // re-register (that throws once pending and would swallow the open) —
@@ -145,12 +213,20 @@ final class AppState: ObservableObject {
         }
         do {
             try helper.register()
+            let wasUsable = helperWasUsable
             refreshHelperStatus()
+            helperWasUsable = usingHelper
             if helper.requiresApproval {
                 lastError = "Approve Lidless in System Settings ▸ Login Items."
                 helper.openLoginItemsSettings()
             } else {
                 lastError = nil
+                // Rare: registered and immediately usable (already approved). Treat
+                // it as the same enable transition the approval path would hit.
+                if !wasUsable, usingHelper {
+                    refreshState()
+                    promptRestartAfterHelperEnabled()
+                }
             }
         } catch {
             lastError = error.localizedDescription
@@ -277,6 +353,9 @@ final class AppState: ObservableObject {
     // MARK: Battery + safety guard
 
     func tick() {
+        // Backstop for the didBecomeActive observer: catch a helper approval even
+        // if the app never lost/regained active state.
+        recheckHelper()
         refreshBattery()
         evaluateSafety()
     }

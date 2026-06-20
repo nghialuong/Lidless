@@ -5,12 +5,19 @@ import ServiceManagement
 /// Manages the privileged helper: registration via SMAppService and XPC calls.
 /// All completion handlers are delivered on the main queue.
 final class HelperManager {
-    static let plistName = "com.nghialuong.lidless.helper.plist"
-
     private var connection: NSXPCConnection?
 
+    /// Helper label / Mach service name, derived from this app's bundle id so the
+    /// `.dev` build talks to its own daemon and never the Release one.
+    private var helperLabel: String {
+        LidlessHelper.label(appBundleID: Bundle.main.bundleIdentifier ?? "com.nghialuong.lidless")
+    }
+
+    /// The generated LaunchDaemon plist embedded at `Contents/Library/LaunchDaemons`.
+    private var plistName: String { "\(helperLabel).plist" }
+
     private var service: SMAppService {
-        SMAppService.daemon(plistName: Self.plistName)
+        SMAppService.daemon(plistName: plistName)
     }
 
     // MARK: Registration
@@ -38,7 +45,7 @@ final class HelperManager {
 
     private func connect() -> NSXPCConnection {
         if let existing = connection { return existing }
-        let conn = NSXPCConnection(machServiceName: lidlessHelperMachLabel, options: .privileged)
+        let conn = NSXPCConnection(machServiceName: helperLabel, options: .privileged)
         conn.remoteObjectInterface = NSXPCInterface(with: LidlessHelperProtocol.self)
         conn.invalidationHandler = { [weak self] in self?.connection = nil }
         conn.interruptionHandler = { }
