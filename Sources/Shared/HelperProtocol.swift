@@ -1,7 +1,22 @@
 import Foundation
 
-/// Mach service name shared by the app (client) and the privileged helper (server).
-public let lidlessHelperMachLabel = "com.nghialuong.lidless.helper"
+/// Identity of the privileged helper, derived from the owning app's bundle id so
+/// that Debug (`.dev`) and Release builds get fully isolated daemons/services and
+/// never collide. For app bundle id `com.nghialuong.lidless` the helper id —
+/// which doubles as its LaunchDaemon label, Mach service name, and the `.plist`
+/// basename — is `com.nghialuong.lidless.helper`.
+public enum LidlessHelper {
+    /// Label / Mach service name for a given app bundle id.
+    public static func label(appBundleID: String) -> String { "\(appBundleID).helper" }
+
+    /// Env var the generated LaunchDaemon plist passes to the (bundle-less) helper
+    /// executable so it knows which Mach service to listen on without relying on
+    /// an embedded bundle id.
+    public static let machLabelEnvKey = "LIDLESS_MACH_LABEL"
+
+    /// Fallback used only if the app bundle id / env var is unavailable.
+    public static let fallbackLabel = "com.nghialuong.lidless.helper"
+}
 
 /// XPC interface implemented by the root helper and called by the app.
 ///
