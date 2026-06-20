@@ -9,7 +9,6 @@ struct LidlessApp: App {
         MenuBarExtra {
             MenuContent()
                 .environmentObject(state)
-                .environmentObject(updater)
         } label: {
             Image(state.isEnabled ? "MenubarLaptopActive" : "MenubarLaptop")
         }

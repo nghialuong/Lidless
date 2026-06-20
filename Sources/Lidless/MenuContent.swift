@@ -224,18 +224,9 @@ private struct SafetySection: View {
 // MARK: - Footer
 
 private struct FooterActions: View {
-    @EnvironmentObject private var updater: UpdaterController
-
     var body: some View {
         HStack {
             SettingsButton()
-            Button {
-                updater.checkForUpdates()
-            } label: {
-                Label("Check for Updates…", systemImage: "arrow.down.circle")
-                    .foregroundStyle(.secondary)
-            }
-            .disabled(!updater.canCheckForUpdates)
             Spacer()
             Button {
                 NSApplication.shared.terminate(nil)
