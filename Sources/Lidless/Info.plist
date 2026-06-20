@@ -31,7 +31,7 @@
 	<key>SUFeedURL</key>
 	<string>https://nghialuong.github.io/Lidless/appcast.xml</string>
 	<key>SUPublicEDKey</key>
-	<string>REPLACE_WITH_BASE64_ED_PUBLIC_KEY</string>
+	<string>pmOUhSI4qLDIbgndphAMYGc/oZJIk9Nw9KdEcmJBSOY=</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUScheduledCheckInterval</key>

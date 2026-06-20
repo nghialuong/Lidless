@@ -41,7 +41,7 @@ targets:
         LSMinimumSystemVersion: "13.0"
         NSHumanReadableCopyright: "© 2026 Nghia Luong"
         SUFeedURL: https://nghialuong.github.io/Lidless/appcast.xml
-        SUPublicEDKey: REPLACE_WITH_BASE64_ED_PUBLIC_KEY
+        SUPublicEDKey: pmOUhSI4qLDIbgndphAMYGc/oZJIk9Nw9KdEcmJBSOY=
         SUEnableAutomaticChecks: true
         SUScheduledCheckInterval: 86400
     settings:

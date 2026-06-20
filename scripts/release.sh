@@ -40,10 +40,12 @@ DOWNLOAD_URL_PREFIX="${DOWNLOAD_URL_PREFIX:-https://github.com/nghialuong/Lidles
 command -v xcodegen >/dev/null || { echo "need xcodegen (brew install xcodegen)"; exit 1; }
 
 # --- Resolve a Sparkle CLI tool (generate_appcast / generate_keys / sign_update) ---
-# Tries the SPM artifact cache (DerivedData), a vendored bin/, then the Homebrew
-# cask. Echoes the absolute path or exits non-zero.
+# Prefers the version-pinned tools vendored at scripts/sparkle/bin/ (deterministic,
+# works on a clean machine), then falls back to the SPM artifact cache, any bin/
+# under the tree, and finally the Homebrew cask. Echoes the path or exits non-zero.
 sparkle_tool() {
     local name="$1" hit
+    [ -x "scripts/sparkle/bin/$name" ] && { echo "scripts/sparkle/bin/$name"; return 0; }
     hit=$(find ~/Library/Developer/Xcode/DerivedData -type f -name "$name" -path '*/artifacts/sparkle/Sparkle/bin/*' 2>/dev/null | head -n1 || true)
     [ -n "$hit" ] || hit=$(find . -type f -name "$name" -path '*/bin/*' 2>/dev/null | head -n1 || true)
     [ -n "$hit" ] || { [ -x "/Applications/Sparkle.app/Contents/MacOS/$name" ] && hit="/Applications/Sparkle.app/Contents/MacOS/$name"; }
