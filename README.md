@@ -5,6 +5,10 @@ so coding agents (Claude Code, Codex, etc.) keep working while you move around.
 
 > Open source under the [MIT License](LICENSE).
 
+<p align="center">
+  <img src="docs/menu-popover.png" alt="Lidless menu bar popover — keep-awake toggle, helper status, battery, and safety controls" width="420">
+</p>
+
 ## Features
 
 - One-click **keep awake with the lid closed** (menu bar toggle).
@@ -12,6 +16,7 @@ so coding agents (Claude Code, Codex, etc.) keep working while you move around.
 - **Watchdog**: if the app crashes or is force-quit, the helper auto-restores normal sleep — the Mac can't get stuck awake.
 - **Safety guards**: pause when running hot, only-while-charging, and a low-battery cutoff.
 - **Auto-off timer**: optionally turn keep-awake off after 15 min – 4 hours, with a live countdown.
+- **Automatic updates** via [Sparkle](https://sparkle-project.org) — EdDSA-signed appcast, notarized DMGs.
 - **Launch at login**, and a clean menu with battery/power status.
 
 ## How it works
@@ -55,11 +60,15 @@ bash scripts/make_iconset.sh   # renders icon + emits Assets.xcassets/AppIcon.ap
 
 ## Release
 
-Signed + notarized DMG (needs a Developer ID cert + a notarytool keychain profile):
+Signed + notarized DMG plus the EdDSA-signed Sparkle appcast (needs a Developer ID
+cert, a notarytool keychain profile, and the Sparkle signing key in the keychain):
 
 ```bash
-./scripts/release.sh           # archive → export → DMG → notarize → staple
+./scripts/release.sh   # archive → export → notarize → staple → DMG → appcast → publish
 ```
+
+Publishes the DMG to a GitHub Release and writes the feed to `docs/appcast.xml`
+(served at the `SUFeedURL` in `project.yml`).
 
 ## Milestones
 
@@ -67,7 +76,8 @@ Signed + notarized DMG (needs a Developer ID cert + a notarytool keychain profil
 - **M1 / M1.5** — menu-bar app + privileged helper + XPC + watchdog. ✅
 - **M2** — safety preferences (thermal / charging / battery) + persistence. ✅
 - **App complete** — icon, launch-at-login, onboarding, About, release pipeline. ✅
-- **Later** — Sparkle auto-update, signed runtime verification on device.
+- **Auto-update** — Sparkle with an EdDSA-signed appcast, shipped from `release.sh`. ✅
+- **Later** — signed runtime verification on device.
 
 ## Safety
 
