@@ -3,7 +3,7 @@
 A tiny macOS menu-bar app that keeps your Mac running **even with the lid closed** —
 so coding agents (Claude Code, Codex, etc.) keep working while you move around.
 
-> Status: **private / WIP**. Open-source decision not made yet — no license file on purpose.
+> Open source under the [MIT License](LICENSE).
 
 ## Features
 
@@ -42,7 +42,12 @@ The `.xcodeproj` is gitignored — `project.yml` is the source of truth.
 
 ## App icon
 
-The icon (an open eye — the lid that never closes) is generated from a single master:
+The app icon and the menu-bar glyphs are committed assets under
+`Resources/Assets.xcassets/` (`AppIcon.appiconset` plus the `MenubarLaptop` /
+`MenubarLaptopActive` template imagesets that mark keep-awake off / on).
+
+`scripts/make_iconset.sh` is kept as a helper for regenerating an icon set from a
+single master if you want to swap the artwork:
 
 ```bash
 bash scripts/make_iconset.sh   # renders icon + emits Assets.xcassets/AppIcon.appiconset
@@ -62,10 +67,16 @@ Signed + notarized DMG (needs a Developer ID cert + a notarytool keychain profil
 - **M1 / M1.5** — menu-bar app + privileged helper + XPC + watchdog. ✅
 - **M2** — safety preferences (thermal / charging / battery) + persistence. ✅
 - **App complete** — icon, launch-at-login, onboarding, About, release pipeline. ✅
-- **Later** — Sparkle auto-update, signed runtime verification on device, open-source/license call.
+- **Later** — Sparkle auto-update, signed runtime verification on device.
 
 ## Safety
 
 Running with the lid closed under heavy load can heat the machine and drain the battery.
 Keep it plugged in and ventilated. The safety guards auto-pause on heat / low battery,
 and a reboot always resets the underlying flag.
+
+To report a security issue, see [SECURITY.md](SECURITY.md).
+
+## License
+
+[MIT](LICENSE) © 2026 Nghia Luong

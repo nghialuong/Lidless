@@ -2,12 +2,13 @@ import Foundation
 
 /// Controls the macOS `SleepDisabled` flag (IOPMrootDomain).
 ///
-/// M1 implementation shells out to `pmset -a disablesleep` via `osascript`
-/// with administrator privileges, so toggling prompts for the admin password.
+/// This is the **fallback** path, used only when the privileged helper isn't
+/// installed: it shells out to `pmset -a disablesleep` via `osascript` with
+/// administrator privileges, so toggling prompts for the admin password.
 ///
-/// TODO (M1.5): replace with a privileged helper installed via `SMAppService`
-/// that sets the flag over XPC — password-less, plus a heartbeat watchdog that
-/// auto-clears the flag if the app dies (so the Mac can never get stuck awake).
+/// The primary path is `HelperManager`, which sets the flag over XPC through a
+/// root helper installed via `SMAppService` — password-less, plus a heartbeat
+/// watchdog that auto-clears the flag if the app dies.
 struct PowerManager {
 
     /// Read the current `SleepDisabled` flag from `pmset -g`.
