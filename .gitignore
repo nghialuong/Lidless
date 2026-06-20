@@ -15,3 +15,29 @@ xcuserdata/
 
 # SwiftPM
 .swiftpm/
+
+# Sparkle release signing workspace (DMGs live on GitHub Releases; only the
+# generated docs/appcast.xml is committed and served via Pages)
+updates/
+
+# ─── Secrets & signing material — MUST NEVER be committed / made public ───
+# The Sparkle EdDSA *private* key lives only in the login keychain; the *public*
+# key (SUPublicEDKey, safe to publish) is the only key that belongs in the repo.
+# The Apple notary credential is stored in the keychain, never on disk.
+# These patterns are a defense-in-depth net for accidental key exports
+# (e.g. `generate_keys -x sparkle_private_key.pem`) or stray credentials.
+*.pem
+*private*key*
+*PrivateKey*
+sparkle_*key*
+dsa_priv*
+# Apple signing assets (certs / profiles)
+*.p12
+*.cer
+*.cert
+*.mobileprovision
+*.provisionprofile
+# Env / credential dumps
+.env
+.env.*
+*.netrc

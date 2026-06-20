@@ -11,6 +11,11 @@ settings:
     DEVELOPMENT_TEAM: TAFDRXJZSR
     CODE_SIGN_STYLE: Automatic
 
+packages:
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: 2.6.0
+
 targets:
   Lidless:
     type: application
@@ -31,10 +36,14 @@ targets:
         CFBundleName: Lidless
         CFBundleDisplayName: Lidless
         CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "1"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         CFBundleIconName: AppIcon
         LSMinimumSystemVersion: "13.0"
         NSHumanReadableCopyright: "© 2026 Nghia Luong"
+        SUFeedURL: https://nghialuong.github.io/Lidless/appcast.xml
+        SUPublicEDKey: pmOUhSI4qLDIbgndphAMYGc/oZJIk9Nw9KdEcmJBSOY=
+        SUEnableAutomaticChecks: true
+        SUScheduledCheckInterval: 86400
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.nghialuong.lidless
@@ -46,6 +55,8 @@ targets:
       - target: LidlessHelper
         copy:
           destination: executables
+      - package: Sparkle
+        product: Sparkle
 
   LidlessHelper:
     type: tool
@@ -58,6 +69,12 @@ targets:
         PRODUCT_NAME: LidlessHelper
         PRODUCT_BUNDLE_IDENTIFIER: com.nghialuong.lidless.helper
         ENABLE_HARDENED_RUNTIME: YES
+        # The helper is embedded into the app bundle via the Lidless target's
+        # `copy: executables` dependency. Without this, the tool target is also
+        # installed to Products/usr/local/bin in the archive, leaving two install
+        # products so Xcode writes no ApplicationProperties — which makes
+        # `xcodebuild -exportArchive` reject every distribution method.
+        SKIP_INSTALL: YES
 
   LidlessTests:
     type: bundle.unit-test

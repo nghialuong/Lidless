@@ -3,11 +3,13 @@ import SwiftUI
 @main
 struct LidlessApp: App {
     @StateObject private var state = AppState()
+    @StateObject private var updater = UpdaterController()
 
     var body: some Scene {
         MenuBarExtra {
             MenuContent()
                 .environmentObject(state)
+                .environmentObject(updater)
         } label: {
             Image(state.isEnabled ? "MenubarLaptopActive" : "MenubarLaptop")
         }
@@ -16,6 +18,7 @@ struct LidlessApp: App {
         Settings {
             SettingsView()
                 .environmentObject(state)
+                .environmentObject(updater)
         }
     }
 }

@@ -1,0 +1,14 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>Lidless</title>
+        <item>
+            <title>0.1.0</title>
+            <pubDate>Sat, 20 Jun 2026 15:36:29 +0700</pubDate>
+            <sparkle:version>24</sparkle:version>
+            <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/nghialuong/Lidless/releases/latest/download/Lidless-0.1.0.dmg" length="3550814" type="application/octet-stream" sparkle:edSignature="JBWr11hokrD7c+SzBoaSlQWtDkmPVwH14bFoqz2GYbzZDs4zVJjbihk9hKjfUrd4d7d9jvUZDoWe+34wzJTFDg=="/>
+        </item>
+    </channel>
+</rss>
