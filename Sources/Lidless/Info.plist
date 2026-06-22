@@ -19,7 +19,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<string>0.1.1</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSMinimumSystemVersion</key>
@@ -28,12 +28,12 @@
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 Nghia Luong</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
 	<key>SUFeedURL</key>
 	<string>https://raw.githubusercontent.com/nghialuong/Lidless/main/docs/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>pmOUhSI4qLDIbgndphAMYGc/oZJIk9Nw9KdEcmJBSOY=</string>
-	<key>SUEnableAutomaticChecks</key>
-	<true/>
 	<key>SUScheduledCheckInterval</key>
 	<integer>86400</integer>
 </dict>
