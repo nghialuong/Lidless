@@ -9,6 +9,8 @@ public struct SettingsStore {
         static let lowBattery   = "lowBatteryThreshold"
         static let onlyCharging = "onlyWhileCharging"
         static let pauseThermal = "pauseOnHighThermal"
+        static let autoEnable   = "autoEnableWhenCharging"
+        static let armed        = "keepAwakeArmed"
         static let seeded       = "settingsSeeded"
         static let autoOff      = "autoOffMinutes"
         static let onboarded    = "onboardingComplete"
@@ -25,7 +27,8 @@ public struct SettingsStore {
         return SafetySettings(
             lowBatteryThreshold: defaults.integer(forKey: Key.lowBattery),
             onlyWhileCharging: defaults.bool(forKey: Key.onlyCharging),
-            pauseOnHighThermal: defaults.bool(forKey: Key.pauseThermal)
+            pauseOnHighThermal: defaults.bool(forKey: Key.pauseThermal),
+            autoEnableWhenCharging: defaults.bool(forKey: Key.autoEnable)
         )
     }
 
@@ -33,7 +36,18 @@ public struct SettingsStore {
         defaults.set(settings.lowBatteryThreshold, forKey: Key.lowBattery)
         defaults.set(settings.onlyWhileCharging, forKey: Key.onlyCharging)
         defaults.set(settings.pauseOnHighThermal, forKey: Key.pauseThermal)
+        defaults.set(settings.autoEnableWhenCharging, forKey: Key.autoEnable)
         defaults.set(true, forKey: Key.seeded)
+    }
+
+    /// The master-toggle intent in auto mode: whether the user wants keep-awake
+    /// armed (the live state is then gated by power + safety). Defaults to false.
+    public func loadArmed() -> Bool {
+        defaults.bool(forKey: Key.armed)
+    }
+
+    public func saveArmed(_ armed: Bool) {
+        defaults.set(armed, forKey: Key.armed)
     }
 
     /// Auto-off duration in minutes (`0` = no auto-off). Defaults to 0.

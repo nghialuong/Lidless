@@ -32,6 +32,12 @@ struct MenuContent: View {
             PrimaryToggleRow()
                 .padding(.horizontal, hInset)
 
+            if !state.autoWarningReasons.isEmpty {
+                AutoDisabledWarning(reasons: state.autoWarningReasons)
+                    .padding(.horizontal, hInset)
+                    .padding(.bottom, 10)
+            }
+
             Divider()
                 .padding(.horizontal, hInset)
 
@@ -52,6 +58,14 @@ struct MenuContent: View {
                 .padding(.horizontal, hInset)
 
             SafetySection()
+                .padding(.horizontal, hInset)
+                .padding(.top, 12)
+
+            Divider()
+                .padding(.horizontal, hInset)
+                .padding(.top, 12)
+
+            AutomaticSection()
                 .padding(.horizontal, hInset)
                 .padding(.top, 12)
 
@@ -118,8 +132,8 @@ private struct PrimaryToggleRow: View {
                    titleFont: .body.weight(.semibold),
                    minHeight: 42) {
             Toggle("Keep awake with lid closed", isOn: Binding(
-                get: { state.isEnabled },
-                set: { _ in state.toggle() }
+                get: { state.masterToggleOn },
+                set: { state.setMasterToggle($0) }
             ))
             .labelsHidden()
             .toggleStyle(.switch)
@@ -204,18 +218,114 @@ private struct SafetySection: View {
                 .controlSize(.small)
             }
 
-            SettingRow(title: "Low-battery cutoff") {
-                HStack(spacing: 6) {
-                    Text("\(state.settings.lowBatteryThreshold)%")
+            LowBatteryCutoffRow()
+        }
+    }
+}
+
+/// Full-width low-battery cutoff slider (0–100%, step 1). `0` means "Never" —
+/// the low-battery check is disabled entirely.
+private struct LowBatteryCutoffRow: View {
+    @EnvironmentObject var state: AppState
+
+    private var threshold: Int { state.settings.lowBatteryThreshold }
+
+    /// The cutoff is meaningless while "Only while charging" is on (keep-awake is
+    /// already blocked whenever off power), so the row is disabled/greyed then.
+    private var isInactive: Bool { state.settings.onlyWhileCharging }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 12) {
+                Text("Low-battery cutoff")
+                    .font(.callout)
+                    .lineLimit(1)
+                Spacer(minLength: 16)
+                Text(threshold == 0 ? "Never" : "\(threshold)%")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+
+            Slider(
+                value: Binding(
+                    get: { Double(threshold) },
+                    set: { v in var s = state.settings; s.lowBatteryThreshold = Int(v.rounded()); state.updateSettings(s) }
+                ),
+                in: 0...100,
+                step: 5
+            ) {
+                Text("Low-battery cutoff")
+            } minimumValueLabel: {
+                Text("Never").font(.caption2).foregroundStyle(.secondary)
+            } maximumValueLabel: {
+                Text("100%").font(.caption2).foregroundStyle(.secondary)
+            }
+            .labelsHidden()
+            .controlSize(.small)
+        }
+        .frame(minHeight: 36)
+        .padding(.vertical, 4)
+        .disabled(isInactive)
+    }
+}
+
+// MARK: - Auto-mode warning
+
+/// Shown directly under the primary toggle when auto mode is armed but keep-awake
+/// isn't live right now, listing every safety check currently blocking it.
+private struct AutoDisabledWarning: View {
+    let reasons: [SafetyReason]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .foregroundStyle(Color(nsColor: .systemYellow))
+                Text("Automatic mode is on, but keep-awake isn’t active right now.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .font(.callout)
+
+            Text("Temporarily disabled because the following check(s) failed:")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(Array(reasons.enumerated()), id: \.offset) { _, reason in
+                    Text("• \(reason.checkLabel)")
+                        .font(.callout)
                         .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                    Stepper("Low-battery cutoff", value: Binding(
-                        get: { state.settings.lowBatteryThreshold },
-                        set: { v in var s = state.settings; s.lowBatteryThreshold = v; state.updateSettings(s) }
-                    ), in: 5...50, step: 5)
-                    .labelsHidden()
-                    .controlSize(.small)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
+            }
+            .padding(.leading, 4)
+        }
+    }
+}
+
+// MARK: - Automatic
+
+private struct AutomaticSection: View {
+    @EnvironmentObject var state: AppState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Automatic")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.bottom, 2)
+
+            SettingRow(title: "Automatically enable when charging") {
+                Toggle("Automatically enable when charging", isOn: Binding(
+                    get: { state.settings.autoEnableWhenCharging },
+                    set: { v in var s = state.settings; s.autoEnableWhenCharging = v; state.updateSettings(s) }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
             }
         }
     }

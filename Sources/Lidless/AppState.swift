@@ -20,6 +20,30 @@ final class AppState: ObservableObject {
     /// User-tunable safety preferences (persisted).
     @Published var settings: SafetySettings = .default
 
+    /// Auto-mode master-toggle intent (persisted): whether the user wants
+    /// keep-awake armed. In auto mode the *live* state (`isEnabled`) is derived
+    /// from `armed` gated by power + safety; in manual mode this simply mirrors
+    /// `isEnabled`. See `reconcile()`.
+    @Published var armed = false
+
+    /// The currently-unmet checks to surface in the popover's auto-mode warning,
+    /// or empty when there's nothing to warn about. Non-empty only when auto mode
+    /// is on, the feature is armed, but keep-awake isn't live right now.
+    var autoWarningReasons: [SafetyReason] {
+        guard settings.autoEnableWhenCharging, armed, !isEnabled else { return [] }
+        let info = BatteryInfo(percent: batteryPercent, onAC: batteryOnAC)
+        return SafetyEvaluator.allUnmetReasons(battery: info,
+                                               thermalSerious: thermalSerious(),
+                                               settings: settings,
+                                               requirePower: true)
+    }
+
+    /// The value the main "Keep awake with lid closed" toggle should show: the
+    /// armed intent in auto mode, the live state in manual mode.
+    var masterToggleOn: Bool {
+        settings.autoEnableWhenCharging ? armed : isEnabled
+    }
+
     /// Launch-at-login state (the app itself).
     @Published var launchAtLogin = false
 
@@ -58,6 +82,7 @@ final class AppState: ObservableObject {
 
     init() {
         settings = store.load()
+        armed = store.loadArmed()
         autoOffMinutes = store.loadAutoOffMinutes()
         onboardingComplete = store.loadOnboardingComplete()
         launchAtLogin = loginItem.isEnabled
@@ -66,6 +91,11 @@ final class AppState: ObservableObject {
         helperWasUsable = usingHelper
         refreshState()
         refreshBattery()
+        // Auto mode owns the live state at launch: (re-)activate if armed and
+        // conditions allow, or force it off otherwise (in case a prior session
+        // left it on). `force` because the async `refreshState()` above may not
+        // have reported the real state back yet.
+        if settings.autoEnableWhenCharging { reconcile(force: true) }
         batteryTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
@@ -115,9 +145,53 @@ final class AppState: ObservableObject {
     // MARK: Settings
 
     func updateSettings(_ new: SafetySettings) {
+        let wasAuto = settings.autoEnableWhenCharging
         settings = new
         store.save(new)
-        evaluateSafety()
+        if new.autoEnableWhenCharging {
+            if !wasAuto {
+                // Entering auto mode: seed the armed intent from the current live
+                // state, and drop any manual auto-off countdown (auto mode manages
+                // activation itself, so a countdown would just fight it).
+                armed = isEnabled
+                store.saveArmed(armed)
+                cancelAutoOff()
+            }
+            reconcile()
+        } else {
+            evaluateSafety()
+        }
+    }
+
+    /// The main toggle was flipped. In auto mode it sets the armed intent (and
+    /// lets `reconcile()` gate the live state); in manual mode it directly turns
+    /// keep-awake on/off, surfacing any failure/refusal as an alert.
+    func setMasterToggle(_ on: Bool) {
+        if settings.autoEnableWhenCharging {
+            setArmed(on)
+        } else {
+            setEnabled(on, userInitiated: true)
+        }
+    }
+
+    /// Set the auto-mode armed intent, persist it, and reconcile the live state.
+    private func setArmed(_ on: Bool) {
+        armed = on
+        store.saveArmed(on)
+        reconcile()
+    }
+
+    /// Auto mode: derive the live keep-awake state from `armed` gated by external
+    /// power + safety, flipping only the live state (never the `armed` intent) and
+    /// without alerts. When conditions aren't met the feature stays armed and the
+    /// popover's warning explains why it isn't currently active.
+    func reconcile(force: Bool = false) {
+        guard settings.autoEnableWhenCharging else { return }
+        let shouldBeOn = armed && AutoEnablePolicy.canActivate(battery: battery.read(),
+                                                               thermalSerious: thermalSerious(),
+                                                               settings: settings)
+        guard force || shouldBeOn != isEnabled else { return }
+        setEnabled(shouldBeOn, note: nil)
     }
 
     /// Change the auto-off duration. Re-arms (or cancels) the live timer when
@@ -405,7 +479,9 @@ final class AppState: ObservableObject {
 
     private func armAutoOff() {
         cancelAutoOff()
-        guard isEnabled, autoOffMinutes > 0 else { return }
+        // Auto mode manages activation on its own; a countdown would disarm the
+        // feature out from under it, so auto-off is inert while auto mode is on.
+        guard isEnabled, autoOffMinutes > 0, !settings.autoEnableWhenCharging else { return }
         let deadline = AutoOff.deadline(from: Date(), minutes: autoOffMinutes)
         autoOffDeadline = deadline
         refreshAutoOffRemaining()
@@ -446,7 +522,11 @@ final class AppState: ObservableObject {
         // if the app never lost/regained active state.
         recheckHelper()
         refreshBattery()
-        evaluateSafety()
+        if settings.autoEnableWhenCharging {
+            reconcile()
+        } else {
+            evaluateSafety()
+        }
     }
 
     func refreshBattery() {
