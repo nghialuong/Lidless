@@ -5,6 +5,10 @@ import Foundation
 public struct SettingsStore {
     private let defaults: UserDefaults
 
+    /// The prior upstream bundle's defaults domain. Migration reads this domain
+    /// once; it is never registered, modified, or removed.
+    public static let legacyDefaultsDomain = "com.nghialuong.lidless"
+
     private enum Key {
         static let lowBattery   = "lowBatteryThreshold"
         static let onlyCharging = "onlyWhileCharging"
@@ -16,10 +20,58 @@ public struct SettingsStore {
         static let onboarded    = "onboardingComplete"
         static let resumeOnboarding = "resumeOnboarding"
         static let helperBuild  = "lastRegisteredHelperBuild"
+        static let automaticChecks = "SUEnableAutomaticChecks"
+        static let legacyMigrationComplete = "legacyPreferencesMigrated"
+
+        /// User-owned preferences and onboarding state that remain meaningful
+        /// under the new app identity. Helper registration state is deliberately
+        /// excluded because the new helper has a different service identity.
+        static let legacyPreferences = [
+            lowBattery,
+            onlyCharging,
+            pauseThermal,
+            autoEnable,
+            armed,
+            seeded,
+            autoOff,
+            onboarded,
+            resumeOnboarding,
+            automaticChecks,
+        ]
     }
 
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+    }
+
+    /// Copies known preferences from the upstream app on the first launch under
+    /// this fork's production identity. Existing values in this domain always
+    /// win, and a seeded settings domain is never merged with legacy state.
+    ///
+    /// The source is fetched as a persistent-domain snapshot, so this operation
+    /// cannot mutate or delete the upstream app's defaults.
+    @discardableResult
+    public func migrateLegacyPreferencesIfNeeded(
+        from legacyDomain: String = SettingsStore.legacyDefaultsDomain,
+        source: UserDefaults = .standard
+    ) -> Bool {
+        guard defaults.object(forKey: Key.legacyMigrationComplete) == nil else {
+            return false
+        }
+        defaults.set(true, forKey: Key.legacyMigrationComplete)
+
+        guard defaults.object(forKey: Key.seeded) == nil,
+              let legacy = source.persistentDomain(forName: legacyDomain) else {
+            return false
+        }
+
+        var migrated = false
+        for key in Key.legacyPreferences where defaults.object(forKey: key) == nil {
+            guard let value = legacy[key] else { continue }
+            defaults.set(value, forKey: key)
+            migrated = true
+        }
+        return migrated
     }
 
     public func load() -> SafetySettings {

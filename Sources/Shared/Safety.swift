@@ -1,19 +1,27 @@
 import Foundation
 
-/// Watchdog decision logic (pure, unit-testable).
+/// Watchdog decision logic (pure, unit-testable). Monotonic uptime prevents a
+/// wall-clock rollback from extending the period the helper can stay awake.
 public enum Watchdog {
-    /// True when the app has gone quiet longer than `timeout`, so the helper
-    /// should auto-restore normal sleep.
-    public static func shouldAutoRestore(lastHeartbeat: Date, now: Date, timeout: TimeInterval) -> Bool {
-        now.timeIntervalSince(lastHeartbeat) > timeout
+    public static func shouldAutoRestore(lastHeartbeatUptime: UInt64,
+                                         nowUptime: UInt64,
+                                         timeout: TimeInterval) -> Bool {
+        guard nowUptime > lastHeartbeatUptime else { return false }
+        let elapsed = TimeInterval(nowUptime - lastHeartbeatUptime) / 1_000_000_000
+        return elapsed > timeout
     }
 }
 
 /// Battery safety policy (pure, unit-testable).
 public enum SafetyPolicy {
-    /// True when keep-awake should be auto-disabled to protect the battery:
-    /// running on battery (not AC) at or below the threshold percent.
+    /// True when a known battery level is at/below the threshold. An unknown
+    /// source also disables: a safety check cannot pass without readable input.
     public static func shouldDisableForBattery(_ info: BatteryInfo, threshold: Int) -> Bool {
-        !info.onAC && info.percent <= threshold
+        guard threshold > 0 else { return false }
+        switch info.powerState {
+        case .ac:      return false
+        case .battery: return info.percent <= threshold
+        case .unknown: return true
+        }
     }
 }

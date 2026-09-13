@@ -25,20 +25,26 @@ struct MenuContent: View {
                 .padding(.horizontal, hInset)
                 .padding(.top, 8)
 
+            StatusLine()
+                .padding(.horizontal, hInset)
+                .padding(.top, 12)
+
             Divider()
                 .padding(.horizontal, hInset)
                 .padding(.top, 14)
 
-            PrimaryToggleRow()
+            ModePickerRow()
                 .padding(.horizontal, hInset)
+                .padding(.top, 12)
+                .padding(.bottom, 12)
 
-            KeepAwakeDurationRow()
-                .padding(.horizontal, hInset)
-
-            if !state.autoWarningReasons.isEmpty {
-                AutoDisabledWarning(reasons: state.autoWarningReasons)
+            if state.keepAwakeMode == .always {
+                KeepAwakeDurationRow()
                     .padding(.horizontal, hInset)
-                    .padding(.bottom, 10)
+
+                ProtectionControls()
+                    .padding(.horizontal, hInset)
+                    .padding(.top, 2)
             }
 
             Divider()
@@ -80,21 +86,6 @@ struct MenuContent: View {
 
             Divider()
                 .padding(.horizontal, hInset)
-
-            SafetySection()
-                .padding(.horizontal, hInset)
-                .padding(.top, 12)
-
-            Divider()
-                .padding(.horizontal, hInset)
-                .padding(.top, 12)
-
-            AutomaticSection()
-                .padding(.horizontal, hInset)
-                .padding(.top, 12)
-
-            Divider()
-                .padding(.horizontal, hInset)
                 .padding(.top, 12)
 
             FooterActions()
@@ -102,7 +93,7 @@ struct MenuContent: View {
                 .padding(.bottom, 14)
         }
         .frame(width: 360)
-        // The popover is the moment the user actually looks at the toggle, so
+        // The popover is the moment the user actually looks at the picker, so
         // it's the moment it most needs to be true.
         .onAppear { state.refreshState() }
     }
@@ -111,9 +102,8 @@ struct MenuContent: View {
 // MARK: - Reusable row
 
 /// A native settings-style row: leading label, flexible gap, trailing control
-/// pinned to the shared right edge. Used for the primary toggle and every
-/// safety row so all controls share one trailing column.
-private struct SettingRow<Trailing: View>: View {
+/// pinned to the shared right edge. Shared with ProtectionControls.
+struct SettingRow<Trailing: View>: View {
     let title: String
     var titleFont: Font = .callout
     var minHeight: CGFloat = 36
@@ -148,39 +138,79 @@ private struct PopoverHeader: View {
     }
 }
 
-// MARK: - Primary control
+// MARK: - Mode picker
 
-/// The strongest row in the popover: the main keep-awake action.
-private struct PrimaryToggleRow: View {
+/// The single control that decides keep-awake behavior. Replaces the old
+/// master toggle + auto-enable + "Only while charging" trio, which together
+/// expressed one binary outcome through three switches.
+private struct ModePickerRow: View {
     @EnvironmentObject var state: AppState
 
     var body: some View {
-        SettingRow(title: "Keep awake with lid closed",
-                   titleFont: .body.weight(.semibold),
-                   minHeight: 42) {
-            Toggle("Keep awake with lid closed", isOn: Binding(
-                get: { state.masterToggleOn },
-                set: { state.setMasterToggle($0) }
-            ))
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Keep awake with lid closed")
+                .font(.body.weight(.semibold))
+            Picker("Keep awake with lid closed", selection: Binding(
+                get: { state.keepAwakeMode },
+                set: { state.setKeepAwakeMode($0) }
+            )) {
+                Text(KeepAwakeMode.always.label).tag(KeepAwakeMode.always)
+                Text(KeepAwakeMode.onlyWhileCharging.label).tag(KeepAwakeMode.onlyWhileCharging)
+                Text(KeepAwakeMode.off.label).tag(KeepAwakeMode.off)
+            }
+            .pickerStyle(.radioGroup)
             .labelsHidden()
-            .toggleStyle(.switch)
-            .controlSize(.regular)
-            .tint(.accentColor)
         }
+    }
+}
+
+// MARK: - Live status
+
+/// One line that is always literally true: awake, or why not. Replaces the
+/// old three-line warning block and removes the intent-vs-reality
+/// contradiction of a toggle that showed "on" while keep-awake wasn't live.
+private struct StatusLine: View {
+    @EnvironmentObject var state: AppState
+
+    private var line: (color: Color, icon: String, text: String) {
+        if state.keepAwakeMode == .off {
+            return (.secondary, "moon.zzz", "Keep-awake off")
+        }
+        if state.isEnabled {
+            if !state.autoOffRemaining.isEmpty {
+                return (.green, "bolt.fill", "Awake, \(state.autoOffRemaining) left")
+            }
+            return (.green, "bolt.fill",
+                    state.batteryOnAC ? "Awake, on charger" : "Awake, on battery")
+        }
+        if let reason = state.autoWarningReasons.first {
+            return (Color(nsColor: .systemYellow), "pause.circle.fill",
+                    "Paused: \(reason.checkLabel)")
+        }
+        return (Color(nsColor: .systemYellow), "pause.circle.fill", "Paused")
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: line.icon)
+                .foregroundStyle(line.color)
+            Text(line.text)
+                .foregroundStyle(.primary)
+        }
+        .font(.callout)
+        // Headline position: icon carries the state color, text stays
+        // primary so the glance reads first.
+        .accessibilityElement(children: .combine)
     }
 }
 
 // MARK: - Keep-awake duration
 
-/// "Keep awake for 15 minutes" as a single gesture: picking a duration turns
-/// keep-awake on and starts the countdown that turns it back off.
-///
-/// Sits directly under the toggle because it modifies it — this is how long the
-/// switch above stays on, not a setting that lives somewhere else.
+/// "Keep awake for 15 minutes" as a single gesture: picking a duration arms
+/// keep-awake and starts the countdown that disarms it. Only meaningful in
+/// the Always mode, so the picker hides it elsewhere.
 private struct KeepAwakeDurationRow: View {
     @EnvironmentObject var state: AppState
-
-    private var autoMode: Bool { state.settings.autoEnableWhenCharging }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -201,21 +231,12 @@ private struct KeepAwakeDurationRow: View {
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
-                .disabled(autoMode)
             }
 
             if !state.autoOffRemaining.isEmpty {
                 Label("Turning off in \(state.autoOffRemaining)", systemImage: "timer")
                     .font(.callout)
                     .foregroundStyle(.secondary)
-            } else if autoMode {
-                // Auto mode decides activation itself, so a countdown would
-                // disarm the feature behind its back. Say so rather than leaving
-                // a control that looks live and does nothing.
-                Text("Not used while “Automatically enable when charging” is on.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(.bottom, 8)
@@ -265,170 +286,6 @@ private struct StatusStrip: View {
     }
 }
 
-// MARK: - Safety
-
-private struct SafetySection: View {
-    @EnvironmentObject var state: AppState
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("Safety")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.bottom, 2)
-
-            SettingRow(title: "Only while charging") {
-                Toggle("Only while charging", isOn: Binding(
-                    get: { state.settings.onlyWhileCharging },
-                    set: { v in var s = state.settings; s.onlyWhileCharging = v; state.updateSettings(s) }
-                ))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.small)
-            }
-
-            SettingRow(title: "Pause when running hot") {
-                Toggle("Pause when running hot", isOn: Binding(
-                    get: { state.settings.pauseOnHighThermal },
-                    set: { v in var s = state.settings; s.pauseOnHighThermal = v; state.updateSettings(s) }
-                ))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.small)
-            }
-
-            LowBatteryCutoffRow()
-        }
-    }
-}
-
-/// Full-width low-battery cutoff slider (0–100%, snapping in 5% steps). `0` means
-/// "Never" — the low-battery check is disabled entirely.
-private struct LowBatteryCutoffRow: View {
-    @EnvironmentObject var state: AppState
-
-    /// The value shown while dragging. Committing on every step would write
-    /// UserDefaults — and, in auto mode, run a reconcile that can reach the
-    /// privileged helper — once per 5% of travel, so the commit waits for the
-    /// drag to end.
-    @State private var dragging: Double?
-
-    private var threshold: Int { state.settings.lowBatteryThreshold }
-
-    /// The committed value, or the in-flight one while a drag is in progress.
-    private var shown: Int { Int((dragging ?? Double(threshold)).rounded()) }
-
-    /// The cutoff only ever fires off power, so it's meaningless whenever
-    /// keep-awake is already gated on being plugged in — under "Only while
-    /// charging", and equally under auto mode, which requires external power.
-    private var isInactive: Bool {
-        state.settings.onlyWhileCharging || state.settings.autoEnableWhenCharging
-    }
-
-    private var value: Binding<Double> {
-        Binding(get: { dragging ?? Double(threshold) },
-                set: { dragging = $0 })
-    }
-
-    /// Commit the dragged value once the drag ends, and only if it actually moved.
-    private func commit(editing: Bool) {
-        guard !editing, let value = dragging else { return }
-        dragging = nil
-        var updated = state.settings
-        updated.lowBatteryThreshold = Int(value.rounded())
-        guard updated != state.settings else { return }
-        state.updateSettings(updated)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 12) {
-                Text("Low-battery cutoff")
-                    .font(.callout)
-                    .lineLimit(1)
-                Spacer(minLength: 16)
-                Text(shown == 0 ? "Never" : "\(shown)%")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-
-            Slider(value: value,
-                   in: 0...100,
-                   step: 5,
-                   label: { Text("Low-battery cutoff") },
-                   minimumValueLabel: { Text("Never").font(.caption2).foregroundStyle(.secondary) },
-                   maximumValueLabel: { Text("100%").font(.caption2).foregroundStyle(.secondary) },
-                   onEditingChanged: commit)
-            .labelsHidden()
-            .controlSize(.small)
-        }
-        .frame(minHeight: 36)
-        .padding(.vertical, 4)
-        .disabled(isInactive)
-    }
-}
-
-// MARK: - Auto-mode warning
-
-/// Shown directly under the primary toggle when auto mode is armed but keep-awake
-/// isn't live right now, listing every safety check currently blocking it.
-private struct AutoDisabledWarning: View {
-    let reasons: [SafetyReason]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Image(systemName: "exclamationmark.circle.fill")
-                    .foregroundStyle(Color(nsColor: .systemYellow))
-                Text("Automatic mode is on, but keep-awake isn’t active right now.")
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .font(.callout)
-
-            Text("Temporarily disabled because the following check(s) failed:")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(Array(reasons.enumerated()), id: \.offset) { _, reason in
-                    Text("• \(reason.checkLabel)")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .padding(.leading, 4)
-        }
-    }
-}
-
-// MARK: - Automatic
-
-private struct AutomaticSection: View {
-    @EnvironmentObject var state: AppState
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("Automatic")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.bottom, 2)
-
-            SettingRow(title: "Automatically enable when charging") {
-                Toggle("Automatically enable when charging", isOn: Binding(
-                    get: { state.settings.autoEnableWhenCharging },
-                    set: { v in var s = state.settings; s.autoEnableWhenCharging = v; state.updateSettings(s) }
-                ))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.small)
-            }
-        }
-    }
-}
 
 // MARK: - Footer
 

@@ -1,6 +1,6 @@
 name: Lidless
 options:
-  bundleIdPrefix: com.nghialuong
+  bundleIdPrefix: com.mjaverto
   deploymentTarget:
     macOS: "13.0"
   createIntermediateGroups: true
@@ -8,7 +8,7 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    DEVELOPMENT_TEAM: TAFDRXJZSR
+    DEVELOPMENT_TEAM: 5NWMRTN5BA
     CODE_SIGN_STYLE: Automatic
 
 packages:
@@ -35,23 +35,23 @@ targets:
         CFBundleIconName: AppIcon
         LSMinimumSystemVersion: "13.0"
         NSHumanReadableCopyright: "© 2026 Nghia Luong"
-        SUFeedURL: https://raw.githubusercontent.com/nghialuong/Lidless/main/docs/appcast.xml
+        SUFeedURL: https://raw.githubusercontent.com/mjaverto/Lidless/main/docs/appcast.xml
         SUPublicEDKey: pmOUhSI4qLDIbgndphAMYGc/oZJIk9Nw9KdEcmJBSOY=
         SUEnableAutomaticChecks: true
         SUScheduledCheckInterval: 86400
     settings:
       base:
-        MARKETING_VERSION: "0.1.3"
-        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "1.4.0"
+        CURRENT_PROJECT_VERSION: "4"
         ENABLE_HARDENED_RUNTIME: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
       configs:
         # Debug builds get a `.dev` bundle id so a dev build coexists with the
         # released app — separate UserDefaults, login item, and helper daemon.
         Debug:
-          PRODUCT_BUNDLE_IDENTIFIER: com.nghialuong.lidless.dev
+          PRODUCT_BUNDLE_IDENTIFIER: com.mjaverto.lidless.dev
         Release:
-          PRODUCT_BUNDLE_IDENTIFIER: com.nghialuong.lidless
+          PRODUCT_BUNDLE_IDENTIFIER: com.mjaverto.lidless
     dependencies:
       - target: LidlessHelper
         copy:
@@ -110,9 +110,9 @@ targets:
       configs:
         # Helper bundle id tracks the app's (`<app id>.helper`) per build config.
         Debug:
-          PRODUCT_BUNDLE_IDENTIFIER: com.nghialuong.lidless.dev.helper
+          PRODUCT_BUNDLE_IDENTIFIER: com.mjaverto.lidless.dev.helper
         Release:
-          PRODUCT_BUNDLE_IDENTIFIER: com.nghialuong.lidless.helper
+          PRODUCT_BUNDLE_IDENTIFIER: com.mjaverto.lidless.helper
 
   LidlessTests:
     type: bundle.unit-test
@@ -126,7 +126,7 @@ targets:
       - Sources/Lidless/MenuBarExtraPanel.swift
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.nghialuong.lidlessTests
+        PRODUCT_BUNDLE_IDENTIFIER: com.mjaverto.lidless.tests
         GENERATE_INFOPLIST_FILE: YES
 
 schemes:

@@ -1,9 +1,34 @@
 import AppKit
 import SwiftUI
 import Foundation
+import OSLog
+
+/// The user-facing keep-awake mode shown in the popover's picker. Backed by
+/// the persisted auto/armed/charging fields; see `AppState.keepAwakeMode`.
+enum KeepAwakeMode: String, CaseIterable, Identifiable {
+    case always
+    case onlyWhileCharging
+    case off
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .always: return "Always"
+        case .onlyWhileCharging: return "Only while charging"
+        case .off: return "Off"
+        }
+    }
+}
 
 @MainActor
 final class AppState: ObservableObject {
+    private static let logger = Logger(
+        subsystem: LidlessIdentity.diagnosticSubsystem(
+            appBundleID: Bundle.main.bundleIdentifier
+        ),
+        category: "reconciliation"
+    )
     @Published var isEnabled = false
     @Published var helperInstalled = false
     @Published var helperNeedsApproval = false
@@ -18,8 +43,7 @@ final class AppState: ObservableObject {
     /// change and a safety pause can both be on screen at once.
     @Published var externalNotice: String?
 
-    /// Transient status of a write we haven't been able to confirm. Also its own
-    /// channel, so clearing it can't disturb `lastError`.
+    /// A terminal write/read-back failure, separate from policy and helper notes.
     @Published var verificationNotice: String?
 
     /// True when using the privileged helper; false when on the M1 admin-prompt fallback.
@@ -42,14 +66,49 @@ final class AppState: ObservableObject {
         guard settings.autoEnableWhenCharging, armed, !isEnabled else { return [] }
         return SafetyEvaluator.allUnmetReasons(battery: currentBattery,
                                                thermalSerious: thermalSerious(),
-                                               settings: settings,
-                                               requirePower: true)
+                                               settings: settings)
     }
 
-    /// The value the main "Keep awake with lid closed" toggle should show: the
-    /// armed intent in auto mode, the live state in manual mode.
-    var masterToggleOn: Bool {
-        settings.autoEnableWhenCharging ? armed : isEnabled
+    /// The three user-facing modes. Replaces the old trio of a master toggle,
+    /// the auto-enable switch, and "Only while charging": all three expressed
+    /// one binary outcome, and their combinations were hard to predict.
+    var keepAwakeMode: KeepAwakeMode {
+        if settings.autoEnableWhenCharging {
+            guard armed else { return .off }
+            return settings.onlyWhileCharging ? .onlyWhileCharging : .always
+        }
+        // Legacy manual builds had no mode concept; the live state stands in.
+        return isEnabled ? .always : .off
+    }
+
+    /// Switch modes. Maps onto the persisted auto/armed/charging fields, so the
+    /// reconciler, safety checks, and helper need no changes.
+    func setKeepAwakeMode(_ mode: KeepAwakeMode) {
+        switch mode {
+        case .off:
+            if settings.autoEnableWhenCharging {
+                setArmed(false)
+            } else {
+                setEnabled(false, origin: .user)
+            }
+        case .always, .onlyWhileCharging:
+            let onlyCharging = mode == .onlyWhileCharging
+            if settings.autoEnableWhenCharging {
+                if settings.onlyWhileCharging != onlyCharging {
+                    var s = settings
+                    s.onlyWhileCharging = onlyCharging
+                    updateSettings(s)
+                } else if !armed {
+                    setArmed(true)
+                }
+            } else {
+                var s = settings
+                s.autoEnableWhenCharging = true
+                s.onlyWhileCharging = onlyCharging
+                updateSettings(s) // entering auto mode arms and reconciles
+                if !armed { setArmed(true) }
+            }
+        }
     }
 
     /// Launch-at-login state (the app itself).
@@ -71,13 +130,13 @@ final class AppState: ObservableObject {
     /// writes it when the helper isn't installed.
     private let power = PowerManager()
     private let battery = BatteryMonitor()
-    private let store = SettingsStore()
+    private let store: SettingsStore
     private let loginItem = LoginItemManager()
     private lazy var onboarding = OnboardingController(state: self)
 
     /// The app's Sparkle updater. Owned here rather than by `LidlessApp` so the
     /// settings window controller below can hand it to `SettingsView`.
-    let updater = UpdaterController()
+    let updater: UpdaterController
 
     private lazy var settingsWindow = SettingsWindowController(
         contentSize: SettingsView.preferredSize
@@ -101,19 +160,31 @@ final class AppState: ObservableObject {
     /// Last-known "helper is usable" value, so we can detect it flipping on at
     /// runtime (right after the user approves it) and prompt a restart.
     private var helperWasUsable = false
-    /// True once the system flag has been read successfully this session. Set
-    /// only by a read — a write's success reply is a claim, not a reading, and
-    /// treating it as one would let an unconfirmed write masquerade as drift.
+    /// True once the system flag has been read successfully this session.
     private var hasConfirmedState = false
-    /// The write currently awaiting confirmation, if any.
-    private var pendingVerification: PendingVerification?
-    /// Rejects async replies that have been superseded.
+    /// Target owned by the current bounded write operation. Its mutation token
+    /// rejects late replies after a newer safety decision supersedes it.
+    private var activeWriteTarget: Bool?
+    private var sampledBattery = BatteryInfo.unknown
+    /// Rejects async state replies that have been superseded.
     private var sync = StateSync()
-    /// True while the onboarding window is open and not yet completed.
+    /// Rejects an entire stale power sample before UI or policy effects.
+    private var powerSamples = PowerSampleGeneration()
+    /// Polling can recover display state but cannot authorize charging-gated ON.
+    private var powerNotificationsActive = false
     private var onboardingActive = false
     private var didBecomeActiveObserver: NSObjectProtocol?
 
     init() {
+        let store = SettingsStore()
+        if Bundle.main.bundleIdentifier == LidlessIdentity.productionAppBundleID {
+            store.migrateLegacyPreferencesIfNeeded()
+        }
+        self.store = store
+        // Sparkle may schedule a check while it starts. Constructing its
+        // controller only after migration ensures it sees the upstream user's
+        // automatic-check preference on this first launch.
+        updater = UpdaterController()
         settings = store.load()
         armed = store.loadArmed()
         autoOffMinutes = store.loadAutoOffMinutes()
@@ -122,18 +193,23 @@ final class AppState: ObservableObject {
         refreshHelperStatus()
         refreshHelperRegistrationIfUpdated()
         helperWasUsable = usingHelper
+        // Subscribe before the first sample. Without this live source, polling is
+        // recovery-only and charging-gated activation stays fail-closed.
+        powerNotificationsActive = battery.start { [weak self] in
+            Task { @MainActor in self?.handlePowerSourceChange() }
+        }
+        if !powerNotificationsActive {
+            let message = "Power-source notifications are unavailable; keep-awake was disabled."
+            lastError = message
+            setEnabled(false, note: message, origin: .safety)
+        }
         refreshState()
-        refreshBattery()
-        // Auto mode owns the live state at launch: (re-)activate if armed and
-        // conditions allow, or turn it off if a prior session left it on with
-        // conditions since lapsed. `refreshState()` above reads the flag
-        // synchronously, so `isEnabled` is already the real state to compare
-        // against and there's nothing to force.
-        //
-        // Plainly `reconcile()`, not `reconcileNow()`: adopting the state that
-        // read just established may already have dispatched a write, and clearing
-        // that claim here would dispatch a second one for the same decision.
-        reconcile()
+        refreshBattery { [weak self] info in
+            self?.reconcile(supersedeInFlight: false,
+                            sample: info,
+                            trigger: "startup")
+        }
+        // Independent repair backstop for missed notifications and flag drift.
         batteryTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
@@ -164,6 +240,10 @@ final class AppState: ObservableObject {
     }
 
     deinit {
+        battery.stop()
+        batteryTimer?.invalidate()
+        heartbeatTimer?.invalidate()
+        autoOffTimer?.invalidate()
         if let didBecomeActiveObserver {
             NotificationCenter.default.removeObserver(didBecomeActiveObserver)
         }
@@ -211,48 +291,31 @@ final class AppState: ObservableObject {
             }
             reconcileNow()
         } else if let pending = autoWrite.inFlightTarget {
-            // Leaving auto mode with a write still travelling. Its target is where
-            // the system is heading, so that's what manual mode inherits — but the
-            // transition has to own that outcome with a write of its own, or the
-            // auto reply lands afterwards and moves the state in a mode the user
-            // has already left.
-            //
-            // Quiet origin deliberately: the user toggled a mode, not the switch,
-            // so a modal about keep-awake would be about a write they never asked
-            // for. It also can't be `.user` for a second reason — that origin
-            // clears `externalNotice`, which this isn't entitled to do.
-            //
-            // The reply to this write runs `updateAutoOff`, and auto mode is off
-            // in `settings` by now, so the countdown arms exactly as manual mode
-            // expects.
-            refreshBattery()
-            let conditions = SafetySnapshot(battery: currentBattery,
-                                            thermalSerious: thermalSerious())
-            let settled = AutoEnablePolicy.handoffToManual(pendingTarget: pending,
-                                                           conditions: conditions,
-                                                           settings: settings)
+            // Leaving auto mode owns the pending result. Clear its coordinator
+            // claim now, then settle from one fresh asynchronous power sample.
             autoWrite.clear()
-            // Same snapshot to decide and to write: whichever way `settled` went,
-            // the check on the way out is guaranteed to permit it, so this write
-            // always claims a mutation and always supersedes the auto reply.
-            setEnabled(settled, note: nil, origin: .auto, conditions: conditions)
+            refreshBattery { [weak self] info in
+                guard let self, !self.settings.autoEnableWhenCharging else { return }
+                let conditions = SafetySnapshot(
+                    battery: info,
+                    thermalSerious: self.thermalSerious()
+                )
+                let settled = AutoEnablePolicy.handoffToManual(
+                    pendingTarget: pending,
+                    conditions: conditions,
+                    settings: self.settings
+                )
+                self.setEnabled(settled,
+                                note: nil,
+                                origin: .auto,
+                                conditions: conditions)
+            }
         } else {
             // Leaving auto mode hands activation back to the user, so the auto-off
             // countdown becomes applicable again — re-arm it if one is configured
             // and keep-awake is currently on.
             if wasAuto, isEnabled { armAutoOff() }
             evaluateSafety()
-        }
-    }
-
-    /// The main toggle was flipped. In auto mode it sets the armed intent (and
-    /// lets `reconcile()` gate the live state); in manual mode it directly turns
-    /// keep-awake on/off, surfacing any failure/refusal as an alert.
-    func setMasterToggle(_ on: Bool) {
-        if settings.autoEnableWhenCharging {
-            setArmed(on)
-        } else {
-            setEnabled(on, origin: .user)
         }
     }
 
@@ -263,60 +326,60 @@ final class AppState: ObservableObject {
         reconcileNow()
     }
 
-    /// Auto mode: derive the live keep-awake state from `armed` gated by external
-    /// power + safety, flipping only the live state (never the `armed` intent).
-    /// When conditions aren't met the feature stays armed and the popover's
-    /// warning explains why it isn't currently active.
+    /// Auto mode: derive the live keep-awake state from `armed` gated by the
+    /// enabled safety checks, flipping only the live state (never the `armed`
+    /// intent). When conditions aren't met the feature stays armed and the
+    /// popover's warning explains why it isn't currently active.
     ///
     /// The poll's entry point. No-ops when auto mode is off, when the effective
     /// state already matches, or while an earlier write is still outstanding or
     /// has already concluded this turn — see `autoWrite`. `origin: .auto` because
     /// this fires unprompted on the timer and must stay silent.
-    func reconcile() { reconcile(userDriven: false) }
+    func reconcile() {
+        reconcile(supersedeInFlight: false, trigger: "state")
+    }
 
-    /// Reconcile now on behalf of something the user just did — arming, changing
-    /// settings — where waiting for the next tick would read as the control doing
-    /// nothing.
-    ///
-    /// Unlike the poll, this may write over a request still in flight, because
-    /// the user has since said something newer. It does *not* simply drop the
-    /// claim: dropping it loses the pending target, and the decision is then
-    /// taken against a state the system has already left. Disarming while an
-    /// "on" write is travelling would compare `false` against a still-`false`
-    /// `isEnabled`, conclude there was nothing to do, and leave the earlier write
-    /// to land unopposed — turning keep-awake on moments after the user turned it
-    /// off. Deciding against the effective state instead yields a corrective
-    /// write, which supersedes the old reply and, because the helper serialises,
-    /// lands last.
-    private func reconcileNow() { reconcile(userDriven: true) }
+    /// User intent and power notifications may supersede an older in-flight
+    /// target. In particular, an unplug must issue a corrective off immediately.
+    private func reconcileNow() {
+        reconcile(supersedeInFlight: true, trigger: "settings")
+    }
 
-    /// Derive the live keep-awake state from `armed` gated by external power +
-    /// safety, flipping only the live state (never the `armed` intent). When
-    /// conditions aren't met the feature stays armed and the popover's warning
-    /// explains why it isn't currently active.
-    ///
-    /// Refreshes the battery cache first so the decision and the warning list the
-    /// popover renders from it are read off the same sample.
-    private func reconcile(userDriven: Bool) {
+    private func reconcile(supersedeInFlight: Bool,
+                           sample: BatteryInfo? = nil,
+                           trigger: String) {
         guard settings.autoEnableWhenCharging else { return }
-        guard userDriven || autoWrite.mayWrite else { return }
-        refreshBattery()
-        // One sample, used to decide *and* handed to the write, so the check on
-        // the way out can't disagree with the decision that authorised it. A
-        // disagreement there would be a refusal, and a refusal claims no mutation
-        // — leaving a superseded write in force.
-        let conditions = SafetySnapshot(battery: currentBattery,
+        guard supersedeInFlight || autoWrite.mayWrite else { return }
+        guard let battery = sample else {
+            refreshBattery { [weak self] info in
+                self?.reconcile(supersedeInFlight: supersedeInFlight,
+                                sample: info,
+                                trigger: trigger)
+            }
+            return
+        }
+        let conditions = SafetySnapshot(battery: battery,
                                         thermalSerious: thermalSerious())
         let effective = AutoEnablePolicy.effectiveState(pendingTarget: autoWrite.inFlightTarget,
                                                         live: isEnabled)
-        // No target means the outstanding write is already heading where we want
-        // it to. Leave the claim standing rather than clearing it — clearing
-        // would let the next tick dispatch a duplicate alongside a live request.
         guard let target = AutoEnablePolicy.target(armed: armed,
                                                    currentlyEnabled: effective,
                                                    battery: conditions.battery,
                                                    thermalSerious: conditions.thermalSerious,
                                                    settings: settings) else { return }
+        if target && !PowerNotificationPolicy.allowsChargingGatedEnable(
+            subscriptionActive: powerNotificationsActive,
+            signedHelperAvailable: helperInstalled
+        ) {
+            autoWrite.clear()
+            lastError = powerNotificationsActive
+                ? "The signed helper is required for automatic charging activation."
+                : "Power-source notifications are unavailable; automatic activation is disabled."
+            return
+        }
+        Self.logger.notice(
+            "desired_state trigger=\(trigger, privacy: .public) armed=\(self.armed, privacy: .public) power=\(battery.powerState.rawValue, privacy: .public) effective=\(effective, privacy: .public) desired=\(target, privacy: .public)"
+        )
         autoWrite.issued(target: target)
         setEnabled(target, note: nil, origin: .auto, conditions: conditions)
     }
@@ -326,11 +389,9 @@ final class AppState: ObservableObject {
     /// another write. See `AutoWriteCoordinator`.
     private var autoWrite = AutoWriteCoordinator()
 
-    /// The last-sampled battery state, refreshed by `refreshBattery()`. Shared by
-    /// `reconcile()` and `autoWarningReasons` so the two can't disagree.
-    private var currentBattery: BatteryInfo {
-        BatteryInfo(percent: batteryPercent, onAC: batteryOnAC)
-    }
+    /// The exact last sample, including `.unknown`; display booleans must never
+    /// erase uncertainty before a safety decision.
+    private var currentBattery: BatteryInfo { sampledBattery }
 
     /// "Keep awake for N minutes" — the whole gesture, in one call.
     ///
@@ -344,12 +405,19 @@ final class AppState: ObservableObject {
     /// — flat battery, running hot — no timer is left counting down for a state
     /// the Mac never entered.
     func keepAwakeFor(minutes: Int) {
+        autoOffMinutes = minutes
+        store.saveAutoOffMinutes(minutes)
+        if settings.autoEnableWhenCharging {
+            // Always mode: the countdown disarms the intent; reconcile turns
+            // the flag off. "No limit" just drops the countdown.
+            setArmed(true)
+            if minutes > 0 { armAutoOff() } else { cancelAutoOff() }
+            return
+        }
         let request = AutoOff.request(minutes: minutes,
                                       isEnabled: isEnabled,
                                       autoModeOn: settings.autoEnableWhenCharging)
         guard request != .ignoredInAutoMode else { return }
-        autoOffMinutes = minutes
-        store.saveAutoOffMinutes(minutes)
         switch request {
         case .ignoredInAutoMode:
             break
@@ -377,15 +445,22 @@ final class AppState: ObservableObject {
         return state == .serious || state == .critical
     }
 
-    /// Auto-disable keep-awake if current conditions violate the safety policy.
-    func evaluateSafety() {
-        guard isEnabled else { return }
-        let info = battery.read()
+    /// Auto-disable when the live state, or an in-flight enable, violates policy.
+    func evaluateSafety(using sample: BatteryInfo? = nil,
+                        trigger: String = "safety") {
+        guard isEnabled || activeWriteTarget == true else { return }
+        guard let info = sample else {
+            refreshBattery { [weak self] fresh in
+                self?.evaluateSafety(using: fresh, trigger: trigger)
+            }
+            return
+        }
         if let reason = SafetyEvaluator.reasonToDisable(battery: info,
                                                         thermalSerious: thermalSerious(),
                                                         settings: settings) {
-            // Pass the message through so it survives the async helper callback
-            // (which would otherwise clear lastError on success).
+            Self.logger.notice(
+                "desired_state trigger=\(trigger, privacy: .public) power=\(info.powerState.rawValue, privacy: .public) desired=false reason=\(String(describing: reason), privacy: .public)"
+            )
             setEnabled(false, note: reason.message, origin: .safety)
         }
     }
@@ -513,36 +588,17 @@ final class AppState: ObservableObject {
     /// by routing it through root — and an unknown stays an unknown.
     func refreshState() {
         let token = sync.beginRead()
-        applyObserved(power.isSleepDisabled(), token)
+        power.isSleepDisabled { [weak self] observed in
+            self?.applyObserved(observed, token)
+        }
     }
 
     private func applyObserved(_ observed: Bool?, _ token: StateSync.ReadToken) {
         guard sync.shouldApply(token) else { return }   // superseded by a newer read or a write
 
-        // A write we haven't confirmed owns the interpretation until it resolves:
-        // a disagreement here is our own write failing to hold, not somebody
-        // else's doing, and mustn't be reported as an external change.
-        if let pending = pendingVerification {
-            switch StateReconciler.resolve(pending, observed: observed) {
-            case .stillUnverified:
-                break
-            case .confirmed:
-                autoWrite.resolved()
-                pendingVerification = nil
-                verificationNotice = nil
-                hasConfirmedState = true
-            case .writeMismatch(let actual):
-                // Same ordering rule as `applyVerification`: settle the claim
-                // before adopting, so the reconcile that adopting triggers can't
-                // chase the mismatch with another write in this turn.
-                autoWrite.resolved()
-                pendingVerification = nil
-                verificationNotice = StateReconciler.writeMismatchMessage(actual: actual)
-                hasConfirmedState = true
-                adoptSystemState(actual)
-            }
-            return
-        }
+        // The bounded write operation performs its own mandatory read-back.
+        // Periodic reads cannot reinterpret an intermediate attempt as drift.
+        guard activeWriteTarget == nil else { return }
 
         switch StateReconciler.reconcile(shown: isEnabled,
                                          hasBaseline: hasConfirmedState,
@@ -569,15 +625,12 @@ final class AppState: ObservableObject {
     /// Only ever reached for a real transition — `reconcile` returns `.inSync`
     /// when the values already agree — so the 30-second poll can't re-arm the
     /// auto-off timer or restart the heartbeat on every pass.
-    private func adoptSystemState(_ enabled: Bool) {
+    private func adoptSystemState(_ enabled: Bool, reconcileAfter: Bool = true) {
         isEnabled = enabled
-        sync.beginMutation()            // supersede every read and write still in flight
+        sync.beginMutation()
         manageHeartbeat()
         updateAutoOff(for: enabled)
-        // Auto mode owns the live state, so route through `reconcile()` rather
-        // than the manual safety pass: adopting an outside change must be settled
-        // by the same rule that set the state in the first place, or the toggle
-        // visibly jumps and then falls back a tick later.
+        guard reconcileAfter else { return }
         if settings.autoEnableWhenCharging {
             reconcile()
         } else if enabled {
@@ -589,142 +642,254 @@ final class AppState: ObservableObject {
     /// a visible alert (not just the easy-to-miss inline note).
     func toggle() { setEnabled(!isEnabled, origin: .user) }
 
-    /// Set keep-awake. `note` is shown to the user on a successful change
-    /// (used when an auto-pause or the auto-off timer disables it); nil clears
-    /// any prior message. When `origin` is `.user` (the user flipped the toggle),
-    /// a failure or policy refusal also pops a blocking alert so it can't go
-    /// unnoticed; background callers pass their own origin to stay quiet.
-    /// `conditions` is the sample a caller already made its decision from. The
-    /// safety check below still runs — this is not a bypass — but it runs against
-    /// those conditions rather than a fresh reading, so a decision and the write
-    /// it authorises can't be judged against different worlds. Callers that have
-    /// no decision to be consistent with (the user flipping the switch) omit it
-    /// and get the fresh reading, which is what they want.
+    /// Set keep-awake through one bounded request plus mandatory read-back. The
+    /// helper owns all helper-backed retries; the app never queues a second
+    /// enable behind work that may still be running.
     func setEnabled(_ target: Bool,
                     note: String? = nil,
                     origin: SetOrigin = .user,
-                    conditions: SafetySnapshot? = nil) {
+                    conditions: SafetySnapshot? = nil,
+                    deadline: ProcessDeadline? = nil) {
+        // Created at public request entry unless a power notification supplies
+        // its earlier deadline for the entire notification-to-verification path.
+        let operationDeadline = deadline ??
+            ProcessDeadline(after: SafetyTiming.maximumUnplugResponse)
         if StateReconciler.clearsExternalNotice(origin) { externalNotice = nil }
-        // Any other origin takes the flag away from auto mode: its claim is void
-        // and its reply, if one is still in flight, will be rejected as superseded
-        // below. Leaving the claim standing would stall auto mode for a tick or
-        // two on a reply that is never coming.
         if origin != .auto { autoWrite.clear() }
 
-        // Refuse to enable if it would immediately violate the safety policy.
-        // Returns before claiming a mutation, so nothing in flight is disturbed —
-        // which is exactly why a caller correcting an outstanding write must pass
-        // the conditions it decided from: a refusal here supersedes nothing.
-        if target {
-            let checked = conditions ?? SafetySnapshot(battery: battery.read(),
-                                                       thermalSerious: thermalSerious())
-            if let blocker = SafetyEvaluator.reasonToDisable(battery: checked.battery,
-                                                             thermalSerious: checked.thermalSerious,
-                                                             settings: settings) {
-                lastError = blocker.message
-                if origin == .user {
-                    presentFailureAlert(target: target, message: blocker.blockedMessage)
-                }
-                // Nothing was dispatched, so release the claim rather than holding
-                // it for a write that never happened.
-                if origin == .auto { autoWrite.clear() }
-                return
-            }
-        }
-        let resultMessage = note
-
-        // A new write supersedes any older one, along with its pending verification.
-        pendingVerification = nil
         verificationNotice = nil
         let token = sync.beginMutation()
+        activeWriteTarget = target
+        Self.logger.notice(
+            "write_started target=\(target, privacy: .public) origin=\(String(describing: origin), privacy: .public)"
+        )
 
+        guard target, conditions == nil else {
+            beginWrite(target: target,
+                       token: token,
+                       origin: origin,
+                       resultMessage: note,
+                       conditions: conditions,
+                       deadline: operationDeadline)
+            return
+        }
+        refreshBattery(deadline: operationDeadline.capped(to: SafetyTiming.readTimeout)) {
+            [weak self] info in
+            guard let self else { return }
+            self.beginWrite(
+                target: target,
+                token: token,
+                origin: origin,
+                resultMessage: note,
+                conditions: SafetySnapshot(battery: info,
+                                           thermalSerious: self.thermalSerious()),
+                deadline: operationDeadline
+            )
+        }
+    }
+
+    private func beginWrite(target: Bool,
+                            token: StateSync.MutationToken,
+                            origin: SetOrigin,
+                            resultMessage: String?,
+                            conditions: SafetySnapshot?,
+                            deadline: ProcessDeadline) {
+        guard sync.shouldApply(token), activeWriteTarget == target else { return }
+        if target,
+           let checked = conditions,
+           let blocker = SafetyEvaluator.reasonToDisable(
+               battery: checked.battery,
+               thermalSerious: checked.thermalSerious,
+               settings: settings
+           ) {
+            activeWriteTarget = nil
+            if origin == .auto { autoWrite.clear() }
+            lastError = blocker.message
+            Self.logger.error(
+                "write_refused target=true reason=\(String(describing: blocker), privacy: .public)"
+            )
+            if origin == .user {
+                presentFailureAlert(target: target, message: blocker.blockedMessage)
+            }
+            return
+        }
+
+        Self.logger.info(
+            "write_attempt target=\(target, privacy: .public) path=\(self.helperInstalled ? "helper" : "authorization", privacy: .public)"
+        )
         if helperInstalled {
-            helper.setKeepAwake(target) { [weak self] ok, err in
-                guard let self, self.sync.shouldApply(token) else { return }   // superseded write
-                if ok {
-                    self.isEnabled = target
-                    self.lastError = resultMessage
-                    self.manageHeartbeat()
-                    self.updateAutoOff(for: target)
-                    // Deliberately not `hasConfirmedState`: the helper's success
-                    // reply is a claim about the flag, not a reading of it.
-                    self.pendingVerification = PendingVerification(target: target)
-                    self.verifySetApplied(target: target)
-                } else {
-                    // The helper can fail without a message (e.g. a dropped XPC
-                    // reply, or the daemon failing to launch after an update);
-                    // surface it instead of letting the toggle silently no-op.
-                    let message = err ?? "The background helper didn’t respond."
-                    self.lastError = message
-                    if origin == .user { self.presentHelperFailureAlert(message: message) }
-                    self.recoverStateAfterFailedWrite()
-                }
+            let helperDeadline = deadline
+                .reserving(SafetyTiming.readTimeout)
+                .capped(to: SafetyTiming.helperReplyTimeout)
+            helper.setKeepAwake(target, deadline: helperDeadline) { [weak self] ok, error in
+                self?.verifyWrite(target: target,
+                                  token: token,
+                                  origin: origin,
+                                  resultMessage: resultMessage,
+                                  writeSucceeded: ok,
+                                  latestError: error,
+                                  correctionAllowed: true,
+                                  helperBacked: true,
+                                  deadline: deadline)
             }
         } else {
-            do {
-                try power.setSleepDisabled(target)
-                isEnabled = target
-                lastError = resultMessage
-                updateAutoOff(for: target)
-                pendingVerification = PendingVerification(target: target)
-                verifySetApplied(target: target)
-            } catch {
-                lastError = error.localizedDescription
-                if origin == .user { presentFailureAlert(target: target, message: error.localizedDescription) }
-                recoverStateAfterFailedWrite()
+            let authorizationDeadline = deadline
+                .reserving(SafetyTiming.readTimeout)
+                .capped(to: SafetyTiming.authorizationTimeout)
+            power.setSleepDisabled(target, deadline: authorizationDeadline) {
+                [weak self] result in
+                switch result {
+                case .success:
+                    self?.verifyWrite(target: target,
+                                      token: token,
+                                      origin: origin,
+                                      resultMessage: resultMessage,
+                                      writeSucceeded: true,
+                                      latestError: nil,
+                                      correctionAllowed: true,
+                                      helperBacked: false,
+                                      deadline: deadline)
+                case .failure(let failure):
+                    let terminalAuthorizationDecision =
+                        failure == .cancelled || failure == .denied
+                    self?.verifyWrite(target: target,
+                                      token: token,
+                                      origin: origin,
+                                      resultMessage: resultMessage,
+                                      writeSucceeded: false,
+                                      latestError: failure.message,
+                                      correctionAllowed: !terminalAuthorizationDecision,
+                                      helperBacked: false,
+                                      deadline: deadline)
+                }
             }
         }
     }
 
-    /// After a write that reported failure we know nothing reliable about the
-    /// flag — the write may still have landed. Go re-read it through the normal
-    /// reconcile path rather than assigning `isEnabled` directly, so the token,
-    /// baseline, and side effects all stay consistent.
-    ///
-    /// The baseline is dropped first so that read re-establishes it silently: if
-    /// the flag did move, that was our own failed write, and blaming an external
-    /// actor for it would be plainly wrong.
-    private func recoverStateAfterFailedWrite() {
-        // Resolve before re-reading: that read can adopt a state and ask auto mode
-        // to reconcile, which must not turn into an immediate second attempt at
-        // the write that just failed.
-        autoWrite.resolved()
-        hasConfirmedState = false
-        refreshState()
+    private func verifyWrite(target: Bool,
+                             token: StateSync.MutationToken,
+                             origin: SetOrigin,
+                             resultMessage: String?,
+                             writeSucceeded: Bool,
+                             latestError: String?,
+                             correctionAllowed: Bool,
+                             helperBacked: Bool,
+                             deadline: ProcessDeadline) {
+        guard sync.shouldApply(token), activeWriteTarget == target else {
+            Self.logger.info(
+                "write_callback_ignored target=\(target, privacy: .public) reason=superseded"
+            )
+            return
+        }
+        power.isSleepDisabled(deadline: deadline.capped(to: SafetyTiming.readTimeout)) {
+            [weak self] observed in
+            self?.finishWrite(target: target,
+                              token: token,
+                              origin: origin,
+                              resultMessage: resultMessage,
+                              writeSucceeded: writeSucceeded,
+                              observed: observed,
+                              latestError: latestError,
+                              correctionAllowed: correctionAllowed,
+                              helperBacked: helperBacked)
+        }
     }
 
-    /// The write reported success — read the flag back to see whether it landed.
-    private func verifySetApplied(target: Bool) {
-        let token = sync.beginRead()
-        let observed = power.isSleepDisabled()
-        guard sync.shouldApply(token) else { return }
-        applyVerification(StateReconciler.verifyAfterSet(target: target, observed: observed),
-                          target: target)
-    }
+    private func finishWrite(target: Bool,
+                             token: StateSync.MutationToken,
+                             origin: SetOrigin,
+                             resultMessage: String?,
+                             writeSucceeded: Bool,
+                             observed: Bool?,
+                             latestError: String?,
+                             correctionAllowed: Bool,
+                             helperBacked: Bool) {
+        guard sync.shouldApply(token), activeWriteTarget == target else {
+            Self.logger.info(
+                "write_callback_ignored target=\(target, privacy: .public) reason=superseded"
+            )
+            return
+        }
 
-    /// Verification never writes to `lastError`: it keeps its own channel so
-    /// clearing a caveat can't wipe a safety note or a helper error.
-    private func applyVerification(_ outcome: StateReconciler.VerifyOutcome, target: Bool) {
-        // Whatever the outcome, auto mode's write is over. Resolving up front
-        // matters most for `.mismatch`, where adopting the contradicting state
-        // reconciles again: without this, that reconcile would dispatch a fresh
-        // write, whose read-back could mismatch in turn, with no bound but the
-        // stack. Deferring costs a tick and cannot loop.
-        autoWrite.resolved()
-        switch outcome {
-        case .verified:
-            pendingVerification = nil
+        let observedText = observed.map { $0 ? "true" : "false" } ?? "unknown"
+        Self.logger.info(
+            "write_verification target=\(target, privacy: .public) command_ok=\(writeSucceeded, privacy: .public) observed=\(observedText, privacy: .public)"
+        )
+        let decision = VerifiedWritePolicy.decision(
+            target: target,
+            attempt: VerifiedWritePolicy.maximumAttempts,
+            writeSucceeded: writeSucceeded,
+            observed: observed
+        )
+
+        if case .verified = decision {
+            activeWriteTarget = nil
+            autoWrite.resolved()
+            isEnabled = target
+            hasConfirmedState = true
             verificationNotice = nil
+            lastError = resultMessage
+            manageHeartbeat()
+            updateAutoOff(for: target)
+            Self.logger.notice(
+                "write_terminal outcome=verified target=\(target, privacy: .public)"
+            )
+            return
+        }
+
+        guard case .terminal(let failure) = decision else { return }
+        activeWriteTarget = nil
+        autoWrite.resolved()
+        let message = writeFailureMessage(target: target,
+                                          failure: failure,
+                                          underlying: latestError)
+        verificationNotice = message
+        lastError = message
+        if let observed {
             hasConfirmedState = true
-        case .unverified:
-            // Keep `pendingVerification` — the next poll resolves it, and until
-            // then the UI says plainly that the state isn't confirmed.
-            verificationNotice = StateReconciler.unverifiedMessage(target: target)
+            adoptSystemState(observed, reconcileAfter: false)
+        } else {
+            hasConfirmedState = false
+        }
+        Self.logger.error(
+            "write_terminal outcome=failed target=\(target, privacy: .public) failure=\(String(describing: failure), privacy: .public)"
+        )
+
+        // Every uncertain helper enable is followed by OFF regardless of a
+        // momentary read-back. Timed-out XPC messages remain executable.
+        if correctionAllowed,
+           VerifiedWritePolicy.requiresFailClosedCorrection(
+               target: target,
+               writeSucceeded: writeSucceeded,
+               observed: observed
+           ) {
+            Self.logger.fault("fail_closed_disable_started")
+            setEnabled(false, note: message, origin: .safety)
+            return
+        }
+        if origin == .user {
+            if helperBacked {
+                presentHelperFailureAlert(message: message)
+            } else {
+                presentFailureAlert(target: target, message: message)
+            }
+        }
+    }
+
+    private func writeFailureMessage(target: Bool,
+                                     failure: VerifiedWriteFailure,
+                                     underlying: String?) -> String {
+        switch failure {
+        case .writeFailed:
+            return underlying ?? (target
+                ? "Couldn’t apply keep-awake."
+                : "Couldn’t restore normal sleep.")
+        case .readFailed:
+            return target
+                ? "Couldn’t verify keep-awake; Lidless is restoring normal sleep."
+                : "Couldn’t verify that normal sleep was restored."
         case .mismatch(let actual):
-            pendingVerification = nil
-            verificationNotice = StateReconciler.writeMismatchMessage(actual: actual)
-            hasConfirmedState = true
-            adoptSystemState(actual)
+            return "SleepDisabled read back as \(actual ? 1 : 0), not \(target ? 1 : 0)."
         }
     }
 
@@ -789,8 +954,6 @@ final class AppState: ObservableObject {
         }
     }
 
-    // MARK: Auto-off timer
-
     /// Arm when keep-awake turns on, cancel when it turns off.
     private func updateAutoOff(for enabled: Bool) {
         if enabled { armAutoOff() } else { cancelAutoOff() }
@@ -798,9 +961,10 @@ final class AppState: ObservableObject {
 
     private func armAutoOff() {
         cancelAutoOff()
-        // Auto mode manages activation on its own; a countdown would disarm the
-        // feature out from under it, so auto-off is inert while auto mode is on.
-        guard isEnabled, autoOffMinutes > 0, !settings.autoEnableWhenCharging else { return }
+        // Manual mode only runs a countdown while actually on. In auto mode the
+        // countdown disarms the intent at expiry, so it arms regardless of the
+        // live state (a safety pause while armed just leaves it waiting).
+        guard settings.autoEnableWhenCharging || isEnabled, autoOffMinutes > 0 else { return }
         let deadline = AutoOff.deadline(from: Date(), minutes: autoOffMinutes)
         autoOffDeadline = deadline
         refreshAutoOffRemaining()
@@ -818,52 +982,159 @@ final class AppState: ObservableObject {
         autoOffRemaining = ""
     }
 
-    private func autoOffTick() {
-        guard let deadline = autoOffDeadline else { return }
-        if AutoOff.isExpired(deadline: deadline, now: Date()) {
-            let minutes = autoOffMinutes
-            cancelAutoOff()
-            setEnabled(false,
-                       note: "Auto-off: \(AutoOff.optionLabel(minutes: minutes)) elapsed.",
-                       origin: .autoOff)
-        } else {
-            refreshAutoOffRemaining()
-        }
-    }
-
     private func refreshAutoOffRemaining() {
         guard let deadline = autoOffDeadline else { autoOffRemaining = ""; return }
         autoOffRemaining = AutoOff.formatCountdown(AutoOff.remaining(deadline: deadline, now: Date()))
     }
 
-    // MARK: Battery + safety guard
-
-    func tick() {
-        // Backstop for the didBecomeActive observer: catch a helper approval even
-        // if the app never lost/regained active state.
-        recheckHelper()
-        // Advance auto mode's write claim. A concluded write reopens here — this
-        // is where its retry comes from. One still outstanding does not: this tick
-        // may be landing moments after the dispatch, and reopening would put a
-        // second write alongside a live first. It reopens a tick later instead,
-        // which also bounds how long a lost reply can hold the feature.
-        autoWrite.advanceTick()
-        // Reconcile with the real flag every tick, not only while enabled:
-        // polling only when we think it's on would structurally miss the case
-        // where it was turned on behind our back.
-        refreshState()
-        if settings.autoEnableWhenCharging {
-            reconcile()             // refreshes the battery sample itself
+    private func autoOffTick() {
+        guard let deadline = autoOffDeadline else { return }
+        if AutoOff.isExpired(deadline: deadline, now: Date()) {
+            let minutes = autoOffMinutes
+            cancelAutoOff()
+            let note = "Auto-off: \(AutoOff.optionLabel(minutes: minutes)) elapsed."
+            if settings.autoEnableWhenCharging {
+                // Always mode: disarm the intent; reconcile drops the flag.
+                setArmed(false)
+                lastError = note
+            } else {
+                setEnabled(false, note: note, origin: .autoOff)
+            }
         } else {
-            refreshBattery()
-            evaluateSafety()
+            refreshAutoOffRemaining()
         }
     }
 
-    func refreshBattery() {
-        let info = battery.read()
+    // MARK: Battery + safety guard
+
+    func tick() {
+        recheckHelper()
+        autoWrite.advanceTick()
+        refreshState()
+        refreshBattery { [weak self] info in
+            guard let self else { return }
+            if self.settings.autoEnableWhenCharging {
+                self.reconcile(supersedeInFlight: false,
+                               sample: info,
+                               trigger: "periodic")
+            } else {
+                self.evaluateSafety(using: info, trigger: "periodic")
+            }
+        }
+    }
+
+    private func handlePowerSourceChange() {
+        // The one absolute deadline begins at notification entry and covers the
+        // initial parallel reads, helper reply, and final independent read-back.
+        let deadline = ProcessDeadline(after: SafetyTiming.maximumUnplugResponse)
+        let generation = powerSamples.begin()
+        let previous = sampledBattery.powerState
+        let readToken = sync.beginRead()
+        samplePowerAndFlag(deadline: deadline) { [weak self] info, observedGlobal in
+            guard let self, self.powerSamples.shouldApply(generation) else {
+                return
+            }
+            self.applyBatterySample(info)
+            if info.powerState != previous {
+                Self.logger.notice(
+                    "power_transition trigger=notification previous=\(previous.rawValue, privacy: .public) observed=\(info.powerState.rawValue, privacy: .public)"
+                )
+            }
+
+            let thermal = self.thermalSerious()
+            let safetyReason = SafetyEvaluator.reasonToDisable(
+                battery: info,
+                thermalSerious: thermal,
+                settings: self.settings
+            )
+            let policyRequiresOff: Bool
+            if self.settings.autoEnableWhenCharging {
+                policyRequiresOff = !self.armed || !AutoEnablePolicy.canActivate(
+                    battery: info,
+                    thermalSerious: thermal,
+                    settings: self.settings
+                )
+            } else {
+                policyRequiresOff = safetyReason != nil
+            }
+
+            if PowerCallbackPolicy.requiresCorrectiveOff(
+                policyRequiresOff: policyRequiresOff,
+                shownEnabled: self.isEnabled,
+                activeWriteTarget: self.activeWriteTarget,
+                observedGlobal: observedGlobal
+            ) {
+                Self.logger.notice(
+                    "desired_state trigger=power_notification power=\(info.powerState.rawValue, privacy: .public) desired=false"
+                )
+                self.setEnabled(false,
+                                note: safetyReason?.message,
+                                origin: .safety,
+                                conditions: SafetySnapshot(battery: info,
+                                                           thermalSerious: thermal),
+                                deadline: deadline)
+                return
+            }
+
+            // Even when the UI says off, consume the real flag observation so a
+            // delivered power callback repairs display/global drift immediately.
+            self.applyObserved(observedGlobal, readToken)
+            if self.settings.autoEnableWhenCharging {
+                self.reconcile(supersedeInFlight: true,
+                               sample: info,
+                               trigger: "power_notification")
+            } else {
+                self.evaluateSafety(using: info, trigger: "power_notification")
+            }
+        }
+    }
+
+    private func samplePowerAndFlag(
+        deadline: ProcessDeadline,
+        completion: @escaping (BatteryInfo, Bool?) -> Void
+    ) {
+        var batteryResult: BatteryInfo?
+        var observedResult: Bool?
+        var observedFinished = false
+        let finishIfReady = {
+            guard let info = batteryResult, observedFinished else { return }
+            completion(info, observedResult)
+        }
+        battery.read(deadline: deadline.capped(to: SafetyTiming.readTimeout)) { info in
+            batteryResult = info
+            finishIfReady()
+        }
+        power.isSleepDisabled(deadline: deadline.capped(to: SafetyTiming.readTimeout)) {
+            observed in
+            observedResult = observed
+            observedFinished = true
+            finishIfReady()
+        }
+    }
+
+    func refreshBattery(completion: @escaping (BatteryInfo) -> Void) {
+        refreshBattery(deadline: ProcessDeadline(after: SafetyTiming.readTimeout),
+                       completion: completion)
+    }
+
+    private func refreshBattery(deadline: ProcessDeadline,
+                                completion: @escaping (BatteryInfo) -> Void) {
+        let generation = powerSamples.begin()
+        battery.read(deadline: deadline) { [weak self] info in
+            guard let self, self.powerSamples.shouldApply(generation) else {
+                return
+            }
+            self.applyBatterySample(info)
+            completion(info)
+        }
+    }
+
+    private func applyBatterySample(_ info: BatteryInfo) {
+        sampledBattery = info
         batteryPercent = info.percent
         batteryOnAC = info.onAC
-        batteryDescription = "\(info.source) · \(info.percent)%"
+        batteryDescription = info.powerState == .unknown
+            ? "Power status unavailable"
+            : "\(info.source) · \(info.percent)%"
     }
 }

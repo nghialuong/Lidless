@@ -10,7 +10,7 @@ final class HelperManager {
     /// Helper label / Mach service name, derived from this app's bundle id so the
     /// `.dev` build talks to its own daemon and never the Release one.
     private var helperLabel: String {
-        LidlessHelper.label(appBundleID: Bundle.main.bundleIdentifier ?? "com.nghialuong.lidless")
+        LidlessHelper.label(appBundleID: Bundle.main.bundleIdentifier ?? LidlessIdentity.productionAppBundleID)
     }
 
     /// The generated LaunchDaemon plist embedded at `Contents/Library/LaunchDaemons`.
@@ -86,9 +86,24 @@ final class HelperManager {
         return proxy as? LidlessHelperProtocol
     }
 
-    func setKeepAwake(_ enabled: Bool, completion: @escaping (Bool, String?) -> Void) {
-        callWithTimeout(completion: completion) { proxy, done in
-            proxy.setKeepAwake(enabled) { ok, err in done(ok, err) }
+    func setKeepAwake(_ enabled: Bool,
+                      deadline: ProcessDeadline,
+                      completion: @escaping (Bool, String?) -> Void) {
+        // The app-created absolute deadline covers XPC transport and helper
+        // admission as well as execution; the helper receives the same clock.
+        let remaining = deadline.remaining()
+        guard remaining > 0 else {
+            completion(false, "The background helper request timed out.")
+            return
+        }
+        callWithTimeout(timeout: remaining,
+                        completion: completion) { proxy, done in
+            proxy.setKeepAwake(
+                enabled,
+                deadlineUptimeNanoseconds: deadline.uptimeNanoseconds
+            ) { ok, err in
+                done(ok, err)
+            }
         }
     }
 

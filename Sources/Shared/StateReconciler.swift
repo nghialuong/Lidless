@@ -35,11 +35,6 @@ public enum SetOrigin: Equatable {
     case auto
 }
 
-/// A write whose read-back hasn't confirmed it yet.
-public struct PendingVerification: Equatable {
-    public let target: Bool
-    public init(target: Bool) { self.target = target }
-}
 
 /// Pure decision logic for keeping the UI in step with the real system flag.
 ///
@@ -93,56 +88,194 @@ public enum StateReconciler {
         origin == .user
     }
 
-    // MARK: Verifying a write
+}
+/// Why a requested `SleepDisabled` value could not be verified.
+public enum VerifiedWriteFailure: Equatable {
+    case writeFailed
+    case readFailed
+    case mismatch(actual: Bool)
+}
 
-    public enum VerifyOutcome: Equatable {
-        case verified
-        /// The read-back failed. Keep the requested state — the write did report
-        /// success — but don't present it as confirmed.
-        case unverified
-        /// The read-back contradicts the write.
-        case mismatch(actual: Bool)
+/// The bounded retry decision after one write plus its mandatory read-back.
+public enum VerifiedWriteDecision: Equatable {
+    case verified
+    case retry(after: TimeInterval, failure: VerifiedWriteFailure)
+    case terminal(failure: VerifiedWriteFailure)
+}
+
+/// Pure retry and fail-closed policy for verified global writes.
+public enum VerifiedWritePolicy {
+    public static let maximumAttempts = 3
+    public static let retryDelays: [TimeInterval] = [0.15, 0.35]
+
+    public static func decision(target: Bool,
+                                attempt: Int,
+                                writeSucceeded: Bool,
+                                observed: Bool?) -> VerifiedWriteDecision {
+        let failure: VerifiedWriteFailure?
+        if !writeSucceeded {
+            failure = .writeFailed
+        } else if let observed {
+            failure = observed == target ? nil : .mismatch(actual: observed)
+        } else {
+            failure = .readFailed
+        }
+
+        guard let failure else { return .verified }
+        guard attempt < maximumAttempts else { return .terminal(failure: failure) }
+        return .retry(after: retryDelays[attempt - 1], failure: failure)
     }
 
-    public static func verifyAfterSet(target: Bool, observed: Bool?) -> VerifyOutcome {
-        guard let observed else { return .unverified }
-        return observed == target ? .verified : .mismatch(actual: observed)
+    /// A retry may start only when its delay fits inside the operation's
+    /// remaining absolute deadline.
+    public static func retryDelay(afterAttempt attempt: Int,
+                                  remaining: TimeInterval) -> TimeInterval? {
+        guard attempt > 0, attempt < maximumAttempts else { return nil }
+        let delay = retryDelays[attempt - 1]
+        return delay < remaining ? delay : nil
     }
 
-    public enum PendingResolution: Equatable {
-        case stillUnverified
-        case confirmed
-        case writeMismatch(actual: Bool)
+    /// Any terminally uncertain enable is followed by OFF. A momentary `false`
+    /// read cannot prove that a timed-out helper enable will not execute later.
+    public static func requiresFailClosedCorrection(target: Bool,
+                                                    writeSucceeded: Bool,
+                                                    observed: Bool?) -> Bool {
+        target && (!writeSucceeded || observed != true)
+    }
+}
+
+/// Pure bookkeeping for failure paths owned by the privileged helper.
+public enum HelperSafetyPolicy {
+    public static func keepAwakeAfterFailedWrite(requestedEnable: Bool,
+                                                restoreSucceeded: Bool) -> Bool {
+        requestedEnable ? !restoreSucceeded : true
     }
 
-    /// A later read arriving while a write is still unconfirmed.
-    ///
-    /// This is deliberately *not* treated as external drift. We never confirmed
-    /// our own write landed, so a disagreement is most honestly read as a write
-    /// that didn't hold. An external actor could also have moved the flag in the
-    /// meantime and the two are indistinguishable from here — but reporting the
-    /// state we can see, without blaming a third party we can't observe, is the
-    /// conservative reading.
-    public static func resolve(_ pending: PendingVerification, observed: Bool?) -> PendingResolution {
-        guard let observed else { return .stillUnverified }
-        return observed == pending.target ? .confirmed : .writeMismatch(actual: observed)
+    public static func keepAwakeAfterWatchdogAttempt(previous: Bool,
+                                                     restoreSucceeded: Bool) -> Bool {
+        previous && !restoreSucceeded
+    }
+}
+
+/// Coalescing rule for serial helper work. OFF is never discarded or cancelled;
+/// stale enables are skipped before launch and interrupted while running.
+public enum HelperOperationPolicy {
+    public static func shouldStart(requestedEnable: Bool,
+                                   isCurrent: Bool) -> Bool {
+        !requestedEnable || isCurrent
     }
 
-    /// Wording for a write we couldn't confirm. Both directions get a caveat:
-    /// wrongly claiming keep-awake is on strands a build; wrongly claiming sleep
-    /// is restored sends a running Mac into a bag.
-    public static func unverifiedMessage(target: Bool) -> String {
-        target
-            ? "Couldn’t confirm keep-awake with the system — it may not hold when you close the lid."
-            : "Couldn’t confirm sleep was restored — your Mac may still stay awake."
+    public static func shouldCancel(requestedEnable: Bool,
+                                    isCurrent: Bool) -> Bool {
+        requestedEnable && !isCurrent
+    }
+}
+
+public enum HelperQueueAdmission: Equatable {
+    case enqueue
+    case replacePendingEnable
+    case coalescePendingOff
+}
+
+/// Admission and priority rules for the helper's bounded backlog. There can be
+/// one pending enable and one pending OFF; OFF is always selected first.
+public enum HelperQueuePolicy {
+    public static func admission(requestedEnable: Bool,
+                                 hasPendingEnable: Bool,
+                                 hasPendingOff: Bool) -> HelperQueueAdmission {
+        if requestedEnable {
+            return hasPendingEnable ? .replacePendingEnable : .enqueue
+        }
+        return hasPendingOff ? .coalescePendingOff : .enqueue
     }
 
-    /// Wording for a write that demonstrably didn't hold. Kept distinct from
-    /// `ExternalChange.message`, which attributes the change to someone else.
-    public static func writeMismatchMessage(actual: Bool) -> String {
-        actual
-            ? "The change didn’t hold — the system reports keep-awake is on."
-            : "The change didn’t hold — the system reports keep-awake is off."
+    public static func nextTarget(hasPendingEnable: Bool,
+                                  hasPendingOff: Bool) -> Bool? {
+        if hasPendingOff { return false }
+        if hasPendingEnable { return true }
+        return nil
+    }
+}
+
+/// A restarted helper conservatively owns an unreadable global state until a
+/// strict `SleepDisabled` read proves it is off.
+public enum HelperRecoveryPolicy {
+    public static func potentiallyKeepsAwake(observed: Bool?) -> Bool {
+        observed != false
+    }
+}
+
+/// Serialized authorization writes never cancel OFF. A newer mutation may
+/// interrupt only an older enable, after which the serial owner runs OFF first.
+public enum AuthorizationMutationPolicy {
+    public static func shouldCancel(requestedEnable: Bool,
+                                    isCurrent: Bool) -> Bool {
+        requestedEnable && !isCurrent
+    }
+}
+
+/// Charging-gated activation is safe only with a live transition source and the
+/// authenticated helper. Polling remains a recovery signal, not authorization.
+public enum PowerNotificationPolicy {
+    public static func allowsChargingGatedEnable(subscriptionActive: Bool,
+                                                 signedHelperAvailable: Bool) -> Bool {
+        subscriptionActive && signedHelperAvailable
+    }
+}
+
+/// Generation tokens reject an entire stale power sample before it changes
+/// display state or authorizes reconciliation.
+public struct PowerSampleGeneration: Equatable {
+    public struct Token: Equatable {
+        fileprivate let value: UInt64
+    }
+
+    private var current: UInt64 = 0
+
+    public init() {}
+
+    public mutating func begin() -> Token {
+        current &+= 1
+        return Token(value: current)
+    }
+
+    public func shouldApply(_ token: Token) -> Bool {
+        token.value == current
+    }
+}
+
+/// A live power callback must reconcile the real global flag, not merely the
+/// app's displayed state. Unknown read-back is treated conservatively.
+public enum PowerCallbackPolicy {
+    public static func requiresCorrectiveOff(policyRequiresOff: Bool,
+                                             shownEnabled: Bool,
+                                             activeWriteTarget: Bool?,
+                                             observedGlobal: Bool?) -> Bool {
+        guard policyRequiresOff else { return false }
+        return shownEnabled || activeWriteTarget == true || observedGlobal != false
+    }
+}
+
+public enum AuthorizationFailureDisposition: Equatable {
+    case cancelled
+    case denied
+    case executionFailure
+}
+
+/// `osascript` reports AppleScript authorization errors through stderr while its
+/// process status is usually just 1. Preserve the terminal user decisions.
+public enum AuthorizationFailurePolicy {
+    public static func classify(standardError: String) -> AuthorizationFailureDisposition {
+        let message = standardError.lowercased()
+        if message.contains("-128") || message.contains("user canceled") ||
+            message.contains("user cancelled") {
+            return .cancelled
+        }
+        if message.contains("-1743") || message.contains("not authorized") ||
+            message.contains("not permitted") || message.contains("denied") {
+            return .denied
+        }
+        return .executionFailure
     }
 }
 

@@ -5,8 +5,10 @@ public struct SafetySettings: Equatable {
     public var lowBatteryThreshold: Int
     public var onlyWhileCharging: Bool
     public var pauseOnHighThermal: Bool
-    /// When true, keep-awake automatically (re-)activates while the Mac is on
-    /// external power and every enabled safety check passes. See `AutoEnablePolicy`.
+    /// When true, keep-awake automatically activates while `armed` and every
+    /// enabled safety check passes. On battery, only the enabled checks
+    /// ("Only while charging", low-battery cutoff, thermal) pause it.
+    /// See `AutoEnablePolicy`.
     public var autoEnableWhenCharging: Bool
 
     public static let `default` = SafetySettings(
@@ -31,17 +33,16 @@ public struct SafetySettings: Equatable {
 public enum SafetyReason: Equatable {
     case highThermal
     case notCharging
+    /// Power-source data is unavailable, malformed, stale, or contradictory.
+    case powerUnavailable
     case lowBattery(Int)
-    /// The Mac isn't on external power. Used by auto-enable mode, which requires
-    /// external power regardless of the "Only while charging" preference.
-    case notOnPower
 
     public var message: String {
         switch self {
-        case .highThermal:        return "Auto-paused: the Mac is running hot."
-        case .notCharging:        return "Auto-paused: not on charger."
-        case .lowBattery(let p):  return "Auto-paused: battery \(p)% on battery power."
-        case .notOnPower:         return "Auto-paused: not connected to power."
+        case .highThermal:          return "Auto-paused: the Mac is running hot."
+        case .notCharging:          return "Auto-paused: not on charger."
+        case .lowBattery(let p):    return "Auto-paused: battery \(p)% on battery power."
+        case .powerUnavailable:     return "Auto-paused: power status is unavailable."
         }
     }
 
@@ -49,21 +50,21 @@ public enum SafetyReason: Equatable {
     /// won't allow it (vs. `message`, which describes a background auto-pause).
     public var blockedMessage: String {
         switch self {
-        case .highThermal:        return "Your Mac is running hot, so keep-awake is paused. It'll be available again once the Mac cools down."
-        case .notCharging:        return "\u{201C}Only while charging\u{201D} is on, so connect your Mac to power to keep it awake."
-        case .lowBattery(let p):  return "Battery is at \(p)%. Charge above the low-battery cutoff to keep your Mac awake."
-        case .notOnPower:         return "Connect your Mac to power to keep it awake."
+        case .highThermal:          return "Your Mac is running hot, so keep-awake is paused. It'll be available again once the Mac cools down."
+        case .notCharging:          return "\u{201C}Only while charging\u{201D} is on, so connect your Mac to power to keep it awake."
+        case .lowBattery(let p):    return "Battery is at \(p)%. Charge above the low-battery cutoff to keep your Mac awake."
+        case .powerUnavailable:     return "Lidless can’t verify the current power source, so keep-awake is paused."
         }
     }
 
-    /// Short phrasing for the auto-mode warning bullet list (e.g. "Not connected
-    /// to power"). Reflects the *current* unmet condition, not an auto-pause event.
+    /// Short phrasing for the auto-mode warning bullet list. Reflects the
+    /// *current* unmet condition, not an auto-pause event.
     public var checkLabel: String {
         switch self {
-        case .highThermal:        return "Running hot"
-        case .notCharging:        return "Not on charger"
-        case .lowBattery(let p):  return "Battery \(p)% is at or below the cutoff"
-        case .notOnPower:         return "Not connected to power"
+        case .highThermal:          return "Running hot"
+        case .notCharging:          return "Not on charger"
+        case .lowBattery(let p):    return "Battery \(p)% is at or below the cutoff"
+        case .powerUnavailable:     return "Power status unavailable"
         }
     }
 }
@@ -99,7 +100,11 @@ public enum SafetyEvaluator {
         if settings.pauseOnHighThermal && thermalSerious {
             return .highThermal
         }
-        if settings.onlyWhileCharging && !battery.onAC {
+        if battery.powerState == .unknown,
+           settings.onlyWhileCharging || settings.lowBatteryThreshold > 0 {
+            return .powerUnavailable
+        }
+        if settings.onlyWhileCharging && battery.powerState != .ac {
             return .notCharging
         }
         return lowBatteryReason(battery: battery, settings: settings)
@@ -111,27 +116,27 @@ public enum SafetyEvaluator {
     private static func lowBatteryReason(battery: BatteryInfo,
                                          settings: SafetySettings) -> SafetyReason? {
         guard settings.lowBatteryThreshold > 0,
-              !battery.onAC,
+              battery.powerState == .battery,
               battery.percent <= settings.lowBatteryThreshold else { return nil }
         return .lowBattery(battery.percent)
     }
 
     /// Every currently-unmet check, for the auto-mode warning list — unlike
-    /// `reasonToDisable`, which stops at the first. `requirePower` adds the
-    /// external-power requirement that auto mode imposes on top of the user's
-    /// enabled safety checks; when off power that power bullet subsumes the
-    /// redundant "Only while charging" one so we never list both.
+    /// `reasonToDisable`, which stops at the first.
     public static func allUnmetReasons(battery: BatteryInfo,
                                        thermalSerious: Bool,
-                                       settings: SafetySettings,
-                                       requirePower: Bool) -> [SafetyReason] {
+                                       settings: SafetySettings) -> [SafetyReason] {
         var reasons: [SafetyReason] = []
         if settings.pauseOnHighThermal && thermalSerious {
             reasons.append(.highThermal)
         }
-        if requirePower && !battery.onAC {
-            reasons.append(.notOnPower)
-        } else if settings.onlyWhileCharging && !battery.onAC {
+        if battery.powerState == .unknown {
+            if settings.onlyWhileCharging || settings.lowBatteryThreshold > 0 {
+                reasons.append(.powerUnavailable)
+            }
+            return reasons
+        }
+        if settings.onlyWhileCharging && battery.powerState != .ac {
             reasons.append(.notCharging)
         }
         if let lowBattery = lowBatteryReason(battery: battery, settings: settings) {
@@ -142,17 +147,17 @@ public enum SafetyEvaluator {
 }
 
 /// Pure decision for auto-enable mode ("Automatically enable when charging").
-/// Keep-awake may activate only while on external power *and* every enabled
-/// safety check passes. Requiring external power makes the low-battery check
-/// moot (it only fires off power), matching "ignore the battery check on power".
+/// Auto mode owns turning keep-awake on; whether it *stays* on in a given
+/// condition is decided solely by the user's enabled safety checks
+/// ("Only while charging", low-battery cutoff, thermal). Auto mode itself adds
+/// no power requirement of its own.
 public enum AutoEnablePolicy {
     public static func canActivate(battery: BatteryInfo,
                                    thermalSerious: Bool,
                                    settings: SafetySettings) -> Bool {
-        guard battery.onAC else { return false }
-        return SafetyEvaluator.reasonToDisable(battery: battery,
-                                               thermalSerious: thermalSerious,
-                                               settings: settings) == nil
+        SafetyEvaluator.reasonToDisable(battery: battery,
+                                        thermalSerious: thermalSerious,
+                                        settings: settings) == nil
     }
 
     /// The live keep-awake state auto mode wants, or `nil` when there's nothing

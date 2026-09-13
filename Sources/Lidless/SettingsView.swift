@@ -11,7 +11,7 @@ struct SettingsView: View {
     @EnvironmentObject var state: AppState
     @EnvironmentObject var updater: UpdaterController
 
-    private let repoURL = URL(string: "https://github.com/nghialuong/Lidless")!
+    private let repoURL = URL(string: "https://github.com/mjaverto/Lidless")!
 
     var body: some View {
         Form {
@@ -44,12 +44,8 @@ struct SettingsView: View {
                 Text("Background helper")
             }
 
-            // The auto-off timer used to live here as a preference — set a
-            // duration, then separately remember to flip the switch. It's now a
-            // "Keep awake for…" control in the popover next to the toggle it
-            // governs, where choosing a duration also turns keep-awake on. One
-            // concept, one place; a second entry point here would only be a
-            // second thing to keep in step.
+            // Protections live in the popover, shown only where they can take
+            // effect (the Always mode).
 
             Section("Updates") {
                 Toggle("Check for updates automatically", isOn: $updater.automaticallyChecksForUpdates)

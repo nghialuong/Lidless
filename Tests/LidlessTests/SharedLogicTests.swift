@@ -79,19 +79,63 @@ final class SharedLogicTests: XCTestCase {
         XCTAssertFalse(info.onAC)
         XCTAssertEqual(info.source, "Battery")
     }
+    func testBatteryParserRejectsUnavailableMalformedAndContradictoryInput() {
+        for output in [
+            "",
+            "Now drawing from 'AC Power'\n -InternalBattery-0\tunknown",
+            "Now drawing from 'Battery Power'\n -InternalBattery-0\t101%",
+            "Now drawing from 'UPS Power'\n -InternalBattery-0\t80%"
+        ] {
+            XCTAssertEqual(BatteryParsers.parse(pmsetBatt: output), .unknown)
+        }
+    }
+
+    func testPowerSourceCrossCheckRequiresNotificationAndParserAgreement() {
+        let ac = BatteryInfo(percent: 80, powerState: .ac)
+        let battery = BatteryInfo(percent: 80, powerState: .battery)
+
+        XCTAssertEqual(PowerSourceCrossCheck.reconcile(iokit: .ac, parsed: ac), ac)
+        XCTAssertEqual(PowerSourceCrossCheck.reconcile(iokit: .battery, parsed: battery),
+                       battery)
+        XCTAssertEqual(PowerSourceCrossCheck.reconcile(iokit: .ac, parsed: battery),
+                       .unknown)
+        XCTAssertEqual(PowerSourceCrossCheck.reconcile(iokit: .battery, parsed: ac),
+                       .unknown)
+        XCTAssertEqual(PowerSourceCrossCheck.reconcile(iokit: nil, parsed: ac),
+                       .unknown)
+        XCTAssertEqual(PowerSourceCrossCheck.reconcile(iokit: .ac, parsed: .unknown),
+                       .unknown)
+    }
+
 
     // MARK: Watchdog
 
-    func testWatchdogFiresAfterTimeout() {
-        let last = Date(timeIntervalSince1970: 1000)
-        let now = Date(timeIntervalSince1970: 1100) // 100s later
-        XCTAssertTrue(Watchdog.shouldAutoRestore(lastHeartbeat: last, now: now, timeout: 90))
+    func testWatchdogUsesMonotonicElapsedTime() {
+        let second: UInt64 = 1_000_000_000
+        XCTAssertTrue(
+            Watchdog.shouldAutoRestore(
+                lastHeartbeatUptime: 1_000 * second,
+                nowUptime: 1_100 * second,
+                timeout: 90
+            )
+        )
+        XCTAssertFalse(
+            Watchdog.shouldAutoRestore(
+                lastHeartbeatUptime: 1_000 * second,
+                nowUptime: 1_060 * second,
+                timeout: 90
+            )
+        )
     }
 
-    func testWatchdogQuietWithinTimeout() {
-        let last = Date(timeIntervalSince1970: 1000)
-        let now = Date(timeIntervalSince1970: 1060) // 60s later
-        XCTAssertFalse(Watchdog.shouldAutoRestore(lastHeartbeat: last, now: now, timeout: 90))
+    func testWatchdogDoesNotUnderflowIfClockSampleMovesBackward() {
+        XCTAssertFalse(
+            Watchdog.shouldAutoRestore(
+                lastHeartbeatUptime: 2_000_000_000,
+                nowUptime: 1_000_000_000,
+                timeout: 0.5
+            )
+        )
     }
 
     // MARK: SafetyPolicy

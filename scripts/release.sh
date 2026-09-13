@@ -7,7 +7,7 @@
 #
 # Prereqs (one-time):
 #   xcrun notarytool store-credentials lidless-notary \
-#       --apple-id "you@example.com" --team-id TAFDRXJZSR --password <app-specific-pw>
+#       --apple-id "you@example.com" --team-id 5NWMRTN5BA --password <app-specific-pw>
 #   # Sparkle signing key (prints the base64 public key for Info.plist SUPublicEDKey):
 #   "$(./scripts/release.sh --print-sparkle-tool generate_keys)"   # or run generate_keys directly
 #
@@ -31,11 +31,11 @@ PUBLISH="${PUBLISH:-1}"
 # large and live on GitHub Releases); only the resulting appcast.xml is published.
 UPDATES_DIR="updates"
 APPCAST="$UPDATES_DIR/appcast.xml"
-# Where GitHub Pages serves the feed from. docs/ on the default branch is served
-# at https://<user>.github.io/<repo>/, matching SUFeedURL .../Lidless/appcast.xml.
+# The committed docs/ file is fetched directly from the default branch at the
+# raw.githubusercontent.com URL configured as SUFeedURL in project.yml.
 PAGES_APPCAST="docs/appcast.xml"
 # Stable base URL the appcast enclosures point at (GitHub Release asset downloads).
-DOWNLOAD_URL_PREFIX="${DOWNLOAD_URL_PREFIX:-https://github.com/nghialuong/Lidless/releases/latest/download}"
+DOWNLOAD_URL_PREFIX="${DOWNLOAD_URL_PREFIX:-https://github.com/mjaverto/Lidless/releases/latest/download}"
 
 command -v xcodegen >/dev/null || { echo "need xcodegen (brew install xcodegen)"; exit 1; }
 
