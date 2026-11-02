@@ -11,7 +11,7 @@ struct SettingsView: View {
     @EnvironmentObject var state: AppState
     @EnvironmentObject var updater: UpdaterController
 
-    private let repoURL = URL(string: "https://github.com/nghialuong/Lidless")!
+    private let repoURL = URL(string: "https://github.com/mjaverto/Lidless")!
 
     var body: some View {
         Form {
@@ -26,17 +26,38 @@ struct SettingsView: View {
             Section {
                 LabeledContent("Status") {
                     HStack(spacing: 6) {
-                        Image(systemName: state.usingHelper ? "checkmark.shield.fill" : "exclamationmark.shield")
-                            .foregroundStyle(state.usingHelper ? .green : .orange)
-                        Text(state.usingHelper ? "Active" : "Using admin prompt")
+                        Image(systemName: helperStatusSymbol)
+                            .foregroundStyle(helperHealthy ? .green : .orange)
+                        Text(helperStatusText)
                             .foregroundStyle(.secondary)
                     }
                 }
-                if !state.helperInstalled {
+                // Driven by `helperHealth`, same vocabulary as the popover
+                // and onboarding: an installed-but-unreachable helper still
+                // needs an action here (Reinstall), which `helperInstalled`
+                // alone would hide since the registration itself is fine.
+                switch state.helperHealth {
+                case .healthy, .checking:
+                    EmptyView()
+                case .unreachable:
+                    Text("The background helper is registered but isn’t responding. This usually happens after an update.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    Button("Reinstall background helper…") {
+                        state.repairHelper()
+                    }
+                case .needsApproval:
                     Text("Install the background helper once so toggling never asks for your password and the watchdog can protect against a stuck-awake Mac.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
-                    Button(state.helperNeedsApproval ? "Open Login Items to approve…" : "Install background helper…") {
+                    Button("Open Login Items to approve…") {
+                        state.installHelper()
+                    }
+                case .notInstalled:
+                    Text("Install the background helper once so toggling never asks for your password and the watchdog can protect against a stuck-awake Mac.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    Button("Install background helper…") {
                         state.installHelper()
                     }
                 }
@@ -44,12 +65,8 @@ struct SettingsView: View {
                 Text("Background helper")
             }
 
-            // The auto-off timer used to live here as a preference — set a
-            // duration, then separately remember to flip the switch. It's now a
-            // "Keep awake for…" control in the popover next to the toggle it
-            // governs, where choosing a duration also turns keep-awake on. One
-            // concept, one place; a second entry point here would only be a
-            // second thing to keep in step.
+            // Protections live in the popover, shown only where they can take
+            // effect (the Always mode).
 
             Section("Updates") {
                 Toggle("Check for updates automatically", isOn: $updater.automaticallyChecksForUpdates)
@@ -77,7 +94,26 @@ struct SettingsView: View {
                 Link("View on GitHub", destination: repoURL)
             }
         }
+        .onAppear { state.checkHelperNow() }
         .formStyle(.grouped)
         .frame(width: Self.preferredSize.width, height: Self.preferredSize.height)
+    }
+
+    /// Same vocabulary as the popover's status strip, so Settings can never
+    /// contradict it.
+    private var helperHealthy: Bool { state.helperHealth == .healthy }
+
+    private var helperStatusText: String {
+        switch state.helperHealth {
+        case .notInstalled: return "Using admin prompt"
+        case .needsApproval: return "Awaiting approval"
+        case .checking: return "Checking…"
+        case .unreachable: return "Not responding"
+        case .healthy: return "Active"
+        }
+    }
+
+    private var helperStatusSymbol: String {
+        helperHealthy ? "checkmark.shield.fill" : "exclamationmark.shield"
     }
 }

@@ -2,8 +2,9 @@ import AppKit
 import SwiftUI
 import XCTest
 
-/// Covers the AppKit-backed Settings window introduced for issue #22: the window
-/// is built once, reused forever, and survives being closed.
+/// Covers the AppKit-backed Settings window introduced for issue #22: the
+/// window is reused while open and rebuilt after a close, because a closed
+/// window's SwiftUI graph leaks observation registrations.
 @MainActor
 final class SettingsWindowControllerTests: XCTestCase {
 
@@ -50,17 +51,22 @@ final class SettingsWindowControllerTests: XCTestCase {
         XCTAssertEqual(counter.count, 1, "content should be built once, not per show()")
     }
 
-    func testShowAfterCloseReordersTheSameWindow() {
-        let sut = makeController()
+    /// Closing releases the window: a closed window's hosting view keeps
+    /// re-rendering on `AppState` changes and leaks SwiftUI observation
+    /// registrations, so the controller must drop it and rebuild on reopen.
+    func testCloseReleasesTheWindowAndShowRebuildsIt() {
+        let counter = BuildCounter()
+        let sut = makeController(counter: counter)
 
         sut.show()
         let first = sut.window
         sut.close()
-        XCTAssertEqual(first?.isVisible, false)
+        XCTAssertNil(sut.window, "close() must release the window")
 
         sut.show()
-        XCTAssertTrue(sut.window === first)
+        XCTAssertTrue(sut.window !== first, "reopen must build a new window")
         XCTAssertEqual(sut.window?.isVisible, true)
+        XCTAssertEqual(counter.count, 2, "content should be rebuilt after close")
     }
 
     func testWindowConfiguration() throws {

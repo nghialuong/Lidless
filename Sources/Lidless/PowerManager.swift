@@ -1,54 +1,92 @@
 import Foundation
 
-/// Controls the macOS `SleepDisabled` flag (IOPMrootDomain).
-///
-/// This is the **fallback** path, used only when the privileged helper isn't
-/// installed: it shells out to `pmset -a disablesleep` via `osascript` with
-/// administrator privileges, so toggling prompts for the admin password.
-///
-/// The primary path is `HelperManager`, which sets the flag over XPC through a
-/// root helper installed via `SMAppService` — password-less, plus a heartbeat
-/// watchdog that auto-clears the flag if the app dies.
-struct PowerManager {
+enum PowerWriteFailure: Error, Equatable {
+    case cancelled
+    case denied
+    case timedOut
+    case execution(String)
 
-    /// Read the current `SleepDisabled` flag from `pmset -g`.
-    ///
-    /// Returns nil whenever the flag wasn't actually observed — `pmset` failed to
-    /// launch, exited non-zero, or printed something that doesn't state the flag.
-    /// A failed read must never collapse into "off".
-    ///
-    /// Reading needs no privileges, so this is the app's read path whether or not
-    /// the helper is installed; the helper is only needed to *change* the flag.
-    func isSleepDisabled() -> Bool? {
-        guard let out = Shell.capture("/usr/bin/pmset", ["-g"]) else { return nil }
-        return PowerParsers.sleepDisabled(pmsetG: out)
+    var message: String {
+        switch self {
+        case .cancelled:
+            return "Authorization cancelled."
+        case .denied:
+            return "Administrator authorization was denied."
+        case .timedOut:
+            return "The authorization request timed out."
+        case .execution(let message):
+            return message
+        }
+    }
+}
+
+/// Controls the macOS `SleepDisabled` flag.
+///
+/// The privileged helper is the safety-critical path. This interactive fallback
+/// has one serialized mutation owner; newer OFF cancels an older enable, then
+/// runs after its process has stopped.
+struct PowerManager {
+    func isSleepDisabled(deadline: ProcessDeadline,
+                         completion: @escaping (Bool?) -> Void) {
+        Shell.capture("/usr/bin/pmset", ["-g"], deadline: deadline) { output in
+            completion(output.flatMap(PowerParsers.sleepDisabled(pmsetG:)))
+        }
     }
 
-    /// Set or clear the flag. Throws with the underlying error message on failure
-    /// (including the user cancelling the admin prompt).
-    func setSleepDisabled(_ enabled: Bool) throws {
+    func isSleepDisabled(completion: @escaping (Bool?) -> Void) {
+        isSleepDisabled(deadline: ProcessDeadline(after: SafetyTiming.readTimeout),
+                        completion: completion)
+    }
+
+    func setSleepDisabled(_ enabled: Bool,
+                          deadline: ProcessDeadline,
+                          completion: @escaping (Result<Void, PowerWriteFailure>) -> Void) {
         let value = enabled ? "1" : "0"
         let script = "do shell script \"/usr/bin/pmset -a disablesleep \(value)\" with administrator privileges"
 
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        proc.arguments = ["-e", script]
-        let errPipe = Pipe()
-        proc.standardError = errPipe
-        proc.standardOutput = Pipe()
+        Shell.runMutation("/usr/bin/osascript",
+                          ["-e", script],
+                          enabling: enabled,
+                          deadline: deadline) { result in
+            switch result {
+            case .success:
+                completion(.success(()))
 
-        try proc.run()
-        proc.waitUntilExit()
+            case .failure(.timedOut):
+                completion(.failure(.timedOut))
 
-        if proc.terminationStatus != 0 {
-            let data = errPipe.fileHandleForReading.readDataToEndOfFile()
-            let msg = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? "Unknown error"
-            throw NSError(
-                domain: "Lidless.PowerManager",
-                code: Int(proc.terminationStatus),
-                userInfo: [NSLocalizedDescriptionKey: msg.isEmpty ? "Authorization cancelled." : msg]
-            )
+            case .failure(.cancelled):
+                completion(.failure(.cancelled))
+
+            case .failure(.launch(let message)):
+                completion(.failure(.execution(message)))
+
+            case .failure(.terminationUnconfirmed):
+                completion(.failure(.execution(
+                    "The authorization process could not be confirmed stopped."
+                )))
+
+            case .failure(.exited(status: _, standardError: let standardError)):
+                switch AuthorizationFailurePolicy.classify(standardError: standardError) {
+                case .cancelled:
+                    completion(.failure(.cancelled))
+                case .denied:
+                    completion(.failure(.denied))
+                case .executionFailure:
+                    completion(.failure(.execution(
+                        standardError.isEmpty ? "The authorization command failed." : standardError
+                    )))
+                }
+            }
         }
+    }
+
+    func setSleepDisabled(_ enabled: Bool,
+                          completion: @escaping (Result<Void, PowerWriteFailure>) -> Void) {
+        setSleepDisabled(
+            enabled,
+            deadline: ProcessDeadline(after: SafetyTiming.authorizationTimeout),
+            completion: completion
+        )
     }
 }

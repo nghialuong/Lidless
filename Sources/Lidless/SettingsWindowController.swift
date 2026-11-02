@@ -22,6 +22,8 @@ final class SettingsWindowController {
 
     private(set) var window: NSWindow?
 
+    private var willCloseObserver: NSObjectProtocol?
+
     init(title: String = "Lidless Settings",
          contentSize: CGSize,
          frameAutosaveName: String = "LidlessSettingsWindow",
@@ -32,8 +34,9 @@ final class SettingsWindowController {
         self.makeContent = makeContent
     }
 
-    /// Show the window, building it on first use and reusing it afterwards so we
-    /// never stack duplicates.
+    /// Show the window. It is reused while open and rebuilt after a close:
+    /// a closed window's hosting view keeps re-rendering on `AppState` changes
+    /// and leaks SwiftUI observation registrations, so closing releases it.
     func show() {
         if window == nil {
             let hosting = NSHostingController(rootView: makeContent())
@@ -55,6 +58,13 @@ final class SettingsWindowController {
             win.center()
             win.setFrameAutosaveName(frameAutosaveName)
             window = win
+            willCloseObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification,
+                object: win,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.releaseWindow() }
+            }
         }
 
         if #available(macOS 14.0, *) {
@@ -77,5 +87,16 @@ final class SettingsWindowController {
 
     func close() {
         window?.close()
+    }
+
+    /// Drop the closed window and its hosting controller so the SwiftUI graph
+    /// stops re-rendering (and leaking observation registrations) while hidden.
+    private func releaseWindow() {
+        if let willCloseObserver {
+            NotificationCenter.default.removeObserver(willCloseObserver)
+            self.willCloseObserver = nil
+        }
+        window?.contentViewController = nil
+        window = nil
     }
 }

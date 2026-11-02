@@ -151,67 +151,322 @@ final class StateReconcilerTests: XCTestCase {
         }
     }
 
-    // MARK: Verifying a write
+    // MARK: Verified writes
 
-    func testVerifiedWhenReadBackMatchesTarget() {
-        XCTAssertEqual(StateReconciler.verifyAfterSet(target: true, observed: true), .verified)
-        XCTAssertEqual(StateReconciler.verifyAfterSet(target: false, observed: false), .verified)
+    func testMismatchRetriesThenMatchingReadBackSucceeds() {
+        XCTAssertEqual(
+            VerifiedWritePolicy.decision(target: false,
+                                         attempt: 1,
+                                         writeSucceeded: true,
+                                         observed: true),
+            .retry(after: 0.15, failure: .mismatch(actual: true))
+        )
+        XCTAssertEqual(
+            VerifiedWritePolicy.decision(target: false,
+                                         attempt: 2,
+                                         writeSucceeded: true,
+                                         observed: false),
+            .verified
+        )
     }
 
-    /// A timed-out read-back must produce neither a false positive nor a false
-    /// negative — the write did report success, we just can't confirm it.
-    func testUnknownReadBackIsUnverifiedNotFailure() {
-        XCTAssertEqual(StateReconciler.verifyAfterSet(target: true, observed: nil), .unverified)
-        XCTAssertEqual(StateReconciler.verifyAfterSet(target: false, observed: nil), .unverified)
+    func testCommandErrorRetriesEvenWhenReadBackMatches() {
+        XCTAssertEqual(
+            VerifiedWritePolicy.decision(target: false,
+                                         attempt: 1,
+                                         writeSucceeded: false,
+                                         observed: false),
+            .retry(after: 0.15, failure: .writeFailed)
+        )
     }
 
-    func testMismatchedReadBackReportsActualState() {
-        XCTAssertEqual(StateReconciler.verifyAfterSet(target: true, observed: false), .mismatch(actual: false))
-        XCTAssertEqual(StateReconciler.verifyAfterSet(target: false, observed: true), .mismatch(actual: true))
+    func testTerminalMismatchAndReadFailureAreBounded() {
+        XCTAssertEqual(
+            VerifiedWritePolicy.decision(target: false,
+                                         attempt: VerifiedWritePolicy.maximumAttempts,
+                                         writeSucceeded: true,
+                                         observed: true),
+            .terminal(failure: .mismatch(actual: true))
+        )
+        XCTAssertEqual(
+            VerifiedWritePolicy.decision(target: false,
+                                         attempt: VerifiedWritePolicy.maximumAttempts,
+                                         writeSucceeded: true,
+                                         observed: nil),
+            .terminal(failure: .readFailed)
+        )
+        XCTAssertEqual(
+            VerifiedWritePolicy.decision(target: false,
+                                         attempt: VerifiedWritePolicy.maximumAttempts,
+                                         writeSucceeded: false,
+                                         observed: nil),
+            .terminal(failure: .writeFailed)
+        )
+        XCTAssertEqual(VerifiedWritePolicy.retryDelays, [0.15, 0.35])
+        XCTAssertEqual(VerifiedWritePolicy.retryDelays.count,
+                       VerifiedWritePolicy.maximumAttempts - 1)
+        XCTAssertLessThan(VerifiedWritePolicy.retryDelays.reduce(0, +), 1)
     }
 
-    func testUnverifiedMessageDoesNotClaimSuccess() {
-        XCTAssertTrue(StateReconciler.unverifiedMessage(target: true).contains("Couldn’t confirm"))
-        XCTAssertTrue(StateReconciler.unverifiedMessage(target: false).contains("Couldn’t confirm"))
-        XCTAssertNotEqual(StateReconciler.unverifiedMessage(target: true),
-                          StateReconciler.unverifiedMessage(target: false))
+    func testMidSequenceReadFailureRetries() {
+        XCTAssertEqual(
+            VerifiedWritePolicy.decision(target: false,
+                                         attempt: 1,
+                                         writeSucceeded: true,
+                                         observed: nil),
+            .retry(after: 0.15, failure: .readFailed)
+        )
     }
 
-    // MARK: Resolving a pending verification
-
-    /// This is what stops the "couldn't confirm" caveat sticking forever.
-    func testPendingConfirmsOnMatchingFreshRead() {
-        let pending = PendingVerification(target: true)
-        XCTAssertEqual(StateReconciler.resolve(pending, observed: true), .confirmed)
-    }
-
-    /// We never confirmed our own write landed, so a later disagreement is a
-    /// write that didn't hold — not somebody else's doing.
-    func testPendingResolvesToWriteMismatchNotExternalDrift() {
-        let pending = PendingVerification(target: true)
-        XCTAssertEqual(StateReconciler.resolve(pending, observed: false), .writeMismatch(actual: false))
-
-        let pendingOff = PendingVerification(target: false)
-        XCTAssertEqual(StateReconciler.resolve(pendingOff, observed: true), .writeMismatch(actual: true))
-    }
-
-    func testPendingStaysUnverifiedWhenTheReadFailsAgain() {
-        let pending = PendingVerification(target: true)
-        XCTAssertEqual(StateReconciler.resolve(pending, observed: nil), .stillUnverified)
-    }
-
-    /// Pins the two channels apart: verification text must never read as an
-    /// accusation that something else changed the flag.
-    func testVerificationMessagesAreDistinctFromExternalChangeMessages() {
-        let external = [ExternalChange.enabledOutside.message, ExternalChange.disabledOutside.message]
-        let verification = [StateReconciler.unverifiedMessage(target: true),
-                            StateReconciler.unverifiedMessage(target: false),
-                            StateReconciler.writeMismatchMessage(actual: true),
-                            StateReconciler.writeMismatchMessage(actual: false)]
-
-        for message in verification {
-            XCTAssertFalse(external.contains(message))
-            XCTAssertFalse(message.contains("outside Lidless"))
+    func testEveryUncertainEnableRequiresCorrectiveOffForAllObservedStates() {
+        for observed in [Optional<Bool>.none, false, true] {
+            XCTAssertTrue(
+                VerifiedWritePolicy.requiresFailClosedCorrection(
+                    target: true,
+                    writeSucceeded: false,
+                    observed: observed
+                ),
+                "observed=\(String(describing: observed))"
+            )
         }
+        XCTAssertTrue(
+            VerifiedWritePolicy.requiresFailClosedCorrection(
+                target: true,
+                writeSucceeded: true,
+                observed: nil
+            )
+        )
+        XCTAssertFalse(
+            VerifiedWritePolicy.requiresFailClosedCorrection(
+                target: true,
+                writeSucceeded: true,
+                observed: true
+            )
+        )
+        XCTAssertFalse(
+            VerifiedWritePolicy.requiresFailClosedCorrection(
+                target: false,
+                writeSucceeded: false,
+                observed: true
+            )
+        )
+    }
+
+    func testHelperFailureBookkeepingKeepsFailedRestoresRetryable() {
+        XCTAssertFalse(
+            HelperSafetyPolicy.keepAwakeAfterFailedWrite(
+                requestedEnable: true,
+                restoreSucceeded: true
+            )
+        )
+        XCTAssertTrue(
+            HelperSafetyPolicy.keepAwakeAfterFailedWrite(
+                requestedEnable: true,
+                restoreSucceeded: false
+            )
+        )
+        XCTAssertTrue(
+            HelperSafetyPolicy.keepAwakeAfterFailedWrite(
+                requestedEnable: false,
+                restoreSucceeded: true
+            )
+        )
+    }
+
+    func testWatchdogClearsBookkeepingOnlyAfterVerifiedRestore() {
+        XCTAssertTrue(
+            HelperSafetyPolicy.keepAwakeAfterWatchdogAttempt(
+                previous: true,
+                restoreSucceeded: false
+            )
+        )
+        XCTAssertFalse(
+            HelperSafetyPolicy.keepAwakeAfterWatchdogAttempt(
+                previous: true,
+                restoreSucceeded: true
+            )
+        )
+    }
+
+    func testPowerCallbackUsesObservedGlobalFlagWhenDisplayIsOff() {
+        XCTAssertTrue(
+            PowerCallbackPolicy.requiresCorrectiveOff(
+                policyRequiresOff: true,
+                shownEnabled: false,
+                activeWriteTarget: nil,
+                observedGlobal: true
+            )
+        )
+        XCTAssertTrue(
+            PowerCallbackPolicy.requiresCorrectiveOff(
+                policyRequiresOff: true,
+                shownEnabled: false,
+                activeWriteTarget: nil,
+                observedGlobal: nil
+            )
+        )
+        XCTAssertFalse(
+            PowerCallbackPolicy.requiresCorrectiveOff(
+                policyRequiresOff: true,
+                shownEnabled: false,
+                activeWriteTarget: nil,
+                observedGlobal: false
+            )
+        )
+    }
+
+    func testPowerCallbackOffSupersedesAnActiveEnable() {
+        XCTAssertTrue(
+            PowerCallbackPolicy.requiresCorrectiveOff(
+                policyRequiresOff: true,
+                shownEnabled: false,
+                activeWriteTarget: true,
+                observedGlobal: false
+            )
+        )
+    }
+
+    func testPowerCallbackDoesNotInventOffWhenPolicyAllowsOn() {
+        XCTAssertFalse(
+            PowerCallbackPolicy.requiresCorrectiveOff(
+                policyRequiresOff: false,
+                shownEnabled: true,
+                activeWriteTarget: true,
+                observedGlobal: nil
+            )
+        )
+    }
+
+    func testStalePowerGenerationCannotApplyAfterNewerUnplugSample() {
+        var generations = PowerSampleGeneration()
+        let staleAC = generations.begin()
+        let unplug = generations.begin()
+
+        XCTAssertFalse(generations.shouldApply(staleAC))
+        XCTAssertTrue(generations.shouldApply(unplug))
+    }
+
+    func testChargingGatedEnableRequiresSubscriptionAndSignedHelper() {
+        XCTAssertTrue(
+            PowerNotificationPolicy.allowsChargingGatedEnable(
+                subscriptionActive: true,
+                signedHelperAvailable: true
+            )
+        )
+        XCTAssertFalse(
+            PowerNotificationPolicy.allowsChargingGatedEnable(
+                subscriptionActive: false,
+                signedHelperAvailable: true
+            )
+        )
+        XCTAssertFalse(
+            PowerNotificationPolicy.allowsChargingGatedEnable(
+                subscriptionActive: true,
+                signedHelperAvailable: false
+            )
+        )
+    }
+
+    func testHelperOrderingSkipsAndCancelsOnlyStaleEnables() {
+        XCTAssertFalse(
+            HelperOperationPolicy.shouldStart(requestedEnable: true,
+                                              isCurrent: false)
+        )
+        XCTAssertTrue(
+            HelperOperationPolicy.shouldCancel(requestedEnable: true,
+                                               isCurrent: false)
+        )
+        XCTAssertTrue(
+            HelperOperationPolicy.shouldStart(requestedEnable: false,
+                                              isCurrent: false)
+        )
+        XCTAssertFalse(
+            HelperOperationPolicy.shouldCancel(requestedEnable: false,
+                                               isCurrent: false)
+        )
+    }
+
+    func testHelperRestartTreatsUnknownAndOnAsOwned() {
+        XCTAssertTrue(HelperRecoveryPolicy.potentiallyKeepsAwake(observed: nil))
+        XCTAssertTrue(HelperRecoveryPolicy.potentiallyKeepsAwake(observed: true))
+        XCTAssertFalse(HelperRecoveryPolicy.potentiallyKeepsAwake(observed: false))
+    }
+
+    func testHelperCoalescesPendingOffAndAlwaysSelectsItFirst() {
+        XCTAssertEqual(
+            HelperQueuePolicy.admission(
+                requestedEnable: false,
+                hasPendingEnable: true,
+                hasPendingOff: true
+            ),
+            .coalescePendingOff
+        )
+        XCTAssertEqual(
+            HelperQueuePolicy.nextTarget(
+                hasPendingEnable: true,
+                hasPendingOff: true
+            ),
+            false
+        )
+    }
+
+    func testFallbackCancelsOnlyStaleEnableSoOffRemainsFinal() {
+        XCTAssertTrue(
+            AuthorizationMutationPolicy.shouldCancel(
+                requestedEnable: true,
+                isCurrent: false
+            )
+        )
+        XCTAssertFalse(
+            AuthorizationMutationPolicy.shouldCancel(
+                requestedEnable: false,
+                isCurrent: false
+            )
+        )
+    }
+
+    func testRetryAndAbsoluteDeadlineBudgetAreMechanicallyBounded() {
+        XCTAssertEqual(VerifiedWritePolicy.retryDelay(afterAttempt: 1,
+                                                      remaining: 0.16),
+                       0.15)
+        XCTAssertNil(VerifiedWritePolicy.retryDelay(afterAttempt: 1,
+                                                    remaining: 0.15))
+        XCTAssertNil(VerifiedWritePolicy.retryDelay(
+            afterAttempt: VerifiedWritePolicy.maximumAttempts,
+            remaining: 10
+        ))
+
+        let fullCriticalPath = SafetyTiming.readTimeout
+            + SafetyTiming.helperReplyTimeout
+            + SafetyTiming.readTimeout
+        XCTAssertEqual(SafetyTiming.maximumUnplugResponse, fullCriticalPath)
+        XCTAssertLessThanOrEqual(SafetyTiming.maximumUnplugResponse, 4.25)
+        XCTAssertLessThan(SafetyTiming.helperEnablePhaseTimeout,
+                          SafetyTiming.helperOperationTimeout)
+
+        let deadline = ProcessDeadline(uptimeNanoseconds: 2_000_000_000)
+        XCTAssertEqual(deadline.remaining(at: 1_250_000_000), 0.75)
+        XCTAssertEqual(deadline.reserving(0.25).uptimeNanoseconds,
+                       1_750_000_000)
+        XCTAssertEqual(deadline.remaining(at: 2_000_000_000), 0)
+    }
+
+    func testAuthorizationCancellationAndDenialAreTerminallyClassified() {
+        XCTAssertEqual(
+            AuthorizationFailurePolicy.classify(
+                standardError: "execution error: User canceled. (-128)"
+            ),
+            .cancelled
+        )
+        XCTAssertEqual(
+            AuthorizationFailurePolicy.classify(
+                standardError: "Not authorized to send Apple events. (-1743)"
+            ),
+            .denied
+        )
+        XCTAssertEqual(
+            AuthorizationFailurePolicy.classify(standardError: "launch failed"),
+            .executionFailure
+        )
     }
 }

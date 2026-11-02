@@ -34,26 +34,75 @@ public enum PowerParsers {
     }
 }
 
+public enum PowerSourceState: String, Equatable {
+    case ac
+    case battery
+    case unknown
+}
+
 public struct BatteryInfo: Equatable {
     public let percent: Int
-    public let onAC: Bool
+    public let powerState: PowerSourceState
 
-    public init(percent: Int, onAC: Bool) {
+    public init(percent: Int, powerState: PowerSourceState) {
         self.percent = percent
-        self.onAC = onAC
+        self.powerState = powerState
     }
 
-    public var source: String { onAC ? "AC" : "Battery" }
+    public init(percent: Int, onAC: Bool) {
+        self.init(percent: percent, powerState: onAC ? .ac : .battery)
+    }
+
+    public static let unknown = BatteryInfo(percent: 0, powerState: .unknown)
+
+    public var onAC: Bool { powerState == .ac }
+
+    public var source: String {
+        switch powerState {
+        case .ac:      return "AC"
+        case .battery: return "Battery"
+        case .unknown: return "Unknown"
+        }
+    }
+}
+
+/// Combines the notification provider with the independently parsed `pmset`
+/// sample. Only agreement is authoritative.
+public enum PowerSourceCrossCheck {
+    public static func reconcile(iokit: PowerSourceState?,
+                                 parsed: BatteryInfo) -> BatteryInfo {
+        guard let iokit,
+              iokit != .unknown,
+              parsed.powerState == iokit else {
+            return .unknown
+        }
+        return parsed
+    }
 }
 
 public enum BatteryParsers {
-    /// Parse `pmset -g batt` output into a BatteryInfo.
+    /// Parse `pmset -g batt` output. Anything missing or contradictory remains
+    /// explicitly unknown so safety decisions never mistake parse failure for AC.
     public static func parse(pmsetBatt output: String) -> BatteryInfo {
-        var percent = 0
-        if let range = output.range(of: #"\d+%"#, options: .regularExpression) {
-            percent = Int(output[range].dropLast()) ?? 0
+        guard let header = output.split(separator: "\n", omittingEmptySubsequences: true).first else {
+            return .unknown
         }
-        let onAC = output.contains("AC Power")
-        return BatteryInfo(percent: percent, onAC: onAC)
+
+        let powerState: PowerSourceState
+        switch header.trimmingCharacters(in: .whitespacesAndNewlines) {
+        case "Now drawing from 'AC Power'":
+            powerState = .ac
+        case "Now drawing from 'Battery Power'":
+            powerState = .battery
+        default:
+            return .unknown
+        }
+
+        guard let range = output.range(of: #"\d{1,3}%"#, options: .regularExpression),
+              let percent = Int(output[range].dropLast()),
+              (0...100).contains(percent) else {
+            return .unknown
+        }
+        return BatteryInfo(percent: percent, powerState: powerState)
     }
 }

@@ -12,13 +12,15 @@ import SwiftUI
 final class OnboardingController {
     private weak var state: AppState?
     private var window: NSWindow?
+    private var willCloseObserver: NSObjectProtocol?
 
     init(state: AppState) {
         self.state = state
     }
 
-    /// Show the window, building it on first use and reusing it afterwards so we
-    /// never stack duplicates.
+    /// Show the window. It is reused while open and rebuilt after a close:
+    /// a closed window's hosting view keeps re-rendering on `AppState` changes
+    /// and leaks SwiftUI observation registrations, so closing releases it.
     func show() {
         guard let state else { return }
 
@@ -32,6 +34,13 @@ final class OnboardingController {
             win.isMovableByWindowBackground = true
             win.isReleasedWhenClosed = false
             win.center()
+            willCloseObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification,
+                object: win,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.releaseWindow() }
+            }
             window = win
         }
 
@@ -42,5 +51,16 @@ final class OnboardingController {
 
     func close() {
         window?.close()
+    }
+
+    /// Drop the closed window and its hosting controller so the SwiftUI graph
+    /// stops re-rendering (and leaking observation registrations) while hidden.
+    private func releaseWindow() {
+        if let willCloseObserver {
+            NotificationCenter.default.removeObserver(willCloseObserver)
+            self.willCloseObserver = nil
+        }
+        window?.contentViewController = nil
+        window = nil
     }
 }

@@ -93,20 +93,35 @@ struct OnboardingView: View {
     @ViewBuilder
     private var helperStatusBox: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if state.usingHelper {
+            // Driven entirely by `helperHealth`, same as the popover and
+            // Settings — never `usingHelper`/`helperNeedsApproval` ahead of
+            // it, which could show "active" while a repair cycle still has
+            // health at `.checking` (registration already reads enabled, but
+            // the fresh binary hasn't been verified to answer yet).
+            switch state.helperHealth {
+            case .unreachable:
+                // Registered but not answering — same vocabulary as the
+                // popover, with the same one-click repair.
+                Label("The background helper isn’t responding.", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Reinstall background helper…") { state.repairHelper() }
+            case .checking:
+                Label("Checking background helper…", systemImage: "ellipsis.circle")
+                    .foregroundStyle(.secondary)
+            case .healthy:
                 Label("Background helper installed and active.", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
-            } else if state.helperNeedsApproval {
+            case .needsApproval:
                 Label("Approve Lidless under System Settings ▸ Login Items, then come back here.", systemImage: "exclamationmark.circle.fill")
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
                 Button("Open Login Items to approve…") { state.installHelper() }
-            } else {
+            case .notInstalled:
                 Button("Install background helper…") { state.installHelper() }
                     .buttonStyle(.borderedProminent)
             }
-
-            if let err = state.lastError, !state.usingHelper {
+            if let err = state.lastError, state.helperHealth != .healthy {
                 Text(err)
                     .font(.footnote)
                     .foregroundStyle(.secondary)

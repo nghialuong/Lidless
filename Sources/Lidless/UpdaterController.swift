@@ -8,9 +8,9 @@ import SwiftUI
 ///
 /// Lidless is an `LSUIElement` menu-bar app with no app menu, so Sparkle's
 /// documented `CommandGroup` integration doesn't surface. Instead we publish
-/// `canCheckForUpdates` (to enable/disable the menu item) and proxy
-/// `automaticallyChecksForUpdates` (Sparkle persists this itself in UserDefaults,
-/// so it stays the single source of truth — no `SettingsStore` key for it).
+/// `canCheckForUpdates` and proxy `automaticallyChecksForUpdates`. Sparkle
+/// persists the latter itself in UserDefaults; `SettingsStore` only preserves
+/// that key during the one-time identity migration.
 @MainActor
 final class UpdaterController: ObservableObject {
     /// Drives the enabled state of the "Check for Updates…" controls.

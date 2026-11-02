@@ -10,7 +10,7 @@ final class HelperManager {
     /// Helper label / Mach service name, derived from this app's bundle id so the
     /// `.dev` build talks to its own daemon and never the Release one.
     private var helperLabel: String {
-        LidlessHelper.label(appBundleID: Bundle.main.bundleIdentifier ?? "com.nghialuong.lidless")
+        LidlessHelper.label(appBundleID: Bundle.main.bundleIdentifier ?? LidlessIdentity.productionAppBundleID)
     }
 
     /// The generated LaunchDaemon plist embedded at `Contents/Library/LaunchDaemons`.
@@ -22,8 +22,18 @@ final class HelperManager {
 
     // MARK: Registration
 
-    var isEnabled: Bool { service.status == .enabled }
-    var requiresApproval: Bool { service.status == .requiresApproval }
+    /// One-shot SMAppService status snapshot mapped to the app's helper
+    /// lifecycle states. Reads `service.status` exactly once per call.
+    var registration: HelperRepairCoordinator.Registration {
+        switch service.status {
+        case .enabled:
+            return .enabled
+        case .requiresApproval:
+            return .pending
+        default:
+            return .absent
+        }
+    }
 
     /// Register the daemon. Throws if registration fails outright. After this,
     /// `status` may be `.requiresApproval` until the user approves in Settings.
@@ -43,6 +53,11 @@ final class HelperManager {
     /// `completion` is delivered on the main queue with any registration error.
     func reregister(completion: @escaping (Error?) -> Void) {
         let svc = service
+        // Drop the cached connection first: it points at the old job, and a
+        // probe reusing it after re-registration would report the fresh
+        // daemon unreachable.
+        connection?.invalidate()
+        connection = nil
         svc.unregister { _ in
             // Give launchd/BTM a moment to drop the old job before re-adding it.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -72,7 +87,20 @@ final class HelperManager {
         if let existing = connection { return existing }
         let conn = NSXPCConnection(machServiceName: helperLabel, options: .privileged)
         conn.remoteObjectInterface = NSXPCInterface(with: LidlessHelperProtocol.self)
-        conn.invalidationHandler = { [weak self] in self?.connection = nil }
+        // Only clear the slot if this is still the current connection: an
+        // *older* connection's invalidation can land after a newer one was
+        // created (e.g. around a re-register) and must not drop it. XPC
+        // invalidation fires on its own internal queue, not necessarily
+        // main, and `connection` is otherwise only ever touched from main —
+        // so the identity check and the clear must run together on main,
+        // not be split across queues where a concurrent `connect()` could
+        // interleave between them.
+        conn.invalidationHandler = { [weak self, weak conn] in
+            DispatchQueue.main.async {
+                guard let self, let conn, self.connection === conn else { return }
+                self.connection = nil
+            }
+        }
         conn.interruptionHandler = { }
         conn.resume()
         connection = conn
@@ -86,9 +114,24 @@ final class HelperManager {
         return proxy as? LidlessHelperProtocol
     }
 
-    func setKeepAwake(_ enabled: Bool, completion: @escaping (Bool, String?) -> Void) {
-        callWithTimeout(completion: completion) { proxy, done in
-            proxy.setKeepAwake(enabled) { ok, err in done(ok, err) }
+    func setKeepAwake(_ enabled: Bool,
+                      deadline: ProcessDeadline,
+                      completion: @escaping (Bool, String?) -> Void) {
+        // The app-created absolute deadline covers XPC transport and helper
+        // admission as well as execution; the helper receives the same clock.
+        let remaining = deadline.remaining()
+        guard remaining > 0 else {
+            completion(false, "The background helper request timed out.")
+            return
+        }
+        callWithTimeout(timeout: remaining,
+                        completion: completion) { proxy, done in
+            proxy.setKeepAwake(
+                enabled,
+                deadlineUptimeNanoseconds: deadline.uptimeNanoseconds
+            ) { ok, err in
+                done(ok, err)
+            }
         }
     }
 

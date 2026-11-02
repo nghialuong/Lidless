@@ -40,6 +40,17 @@ final class SafetyEvaluatorTests: XCTestCase {
             .notCharging
         )
     }
+    func testUnknownPowerFailsClosedWhenChargingOnlyIsEnabled() {
+        var s = defaults
+        s.onlyWhileCharging = true
+        XCTAssertEqual(
+            SafetyEvaluator.reasonToDisable(battery: .unknown,
+                                            thermalSerious: false,
+                                            settings: s),
+            .powerUnavailable
+        )
+    }
+
 
     func testLowBatteryTriggers() {
         let info = BatteryInfo(percent: 15, onAC: false)
@@ -58,13 +69,8 @@ final class SafetyEvaluatorTests: XCTestCase {
         XCTAssertEqual(SafetyReason.highThermal.message, "Auto-paused: the Mac is running hot.")
         XCTAssertEqual(SafetyReason.notCharging.message, "Auto-paused: not on charger.")
         XCTAssertEqual(SafetyReason.lowBattery(12).message, "Auto-paused: battery 12% on battery power.")
-        XCTAssertEqual(SafetyReason.notOnPower.message, "Auto-paused: not connected to power.")
-    }
-
-    func testNotOnPowerPhrasing() {
-        XCTAssertEqual(SafetyReason.notOnPower.blockedMessage,
-                       "Connect your Mac to power to keep it awake.")
-        XCTAssertEqual(SafetyReason.notOnPower.checkLabel, "Not connected to power")
+        XCTAssertEqual(SafetyReason.powerUnavailable.message,
+                       "Auto-paused: power status is unavailable.")
     }
 
     // MARK: Low-battery cutoff = "Never" (0)
@@ -83,10 +89,18 @@ final class SafetyEvaluatorTests: XCTestCase {
             battery: BatteryInfo(percent: 5, onAC: true), thermalSerious: false, settings: defaults))
     }
 
-    func testAutoEnableNeverActivatesOnBattery() {
-        // Even at full charge, auto mode requires external power.
-        XCTAssertFalse(AutoEnablePolicy.canActivate(
+    func testAutoEnableActivatesOnBatteryWhenBatteryChecksOff() {
+        // Full charge, "Only while charging" off, no cutoff hit: auto mode adds
+        // no power requirement of its own, so battery power alone can't block it.
+        XCTAssertTrue(AutoEnablePolicy.canActivate(
             battery: BatteryInfo(percent: 100, onAC: false), thermalSerious: false, settings: defaults))
+    }
+
+    func testAutoEnableBlockedOnBatteryWithOnlyWhileCharging() {
+        var s = defaults
+        s.onlyWhileCharging = true
+        XCTAssertFalse(AutoEnablePolicy.canActivate(
+            battery: BatteryInfo(percent: 100, onAC: false), thermalSerious: false, settings: s))
     }
 
     func testAutoEnableBlockedByThermalOnPower() {
@@ -100,6 +114,11 @@ final class SafetyEvaluatorTests: XCTestCase {
         XCTAssertTrue(AutoEnablePolicy.canActivate(
             battery: BatteryInfo(percent: 50, onAC: true), thermalSerious: false, settings: s))
     }
+    func testAutoEnableNeverActivatesWithUnknownPower() {
+        XCTAssertFalse(AutoEnablePolicy.canActivate(
+            battery: .unknown, thermalSerious: false, settings: defaults))
+    }
+
 
     // MARK: AutoEnablePolicy.target — the state reconcile() acts on
 
@@ -118,12 +137,30 @@ final class SafetyEvaluatorTests: XCTestCase {
             thermalSerious: false, settings: auto), true)
     }
 
-    func testTargetTurnsOffWhenUnplugged() {
+    func testTargetStaysOnWhenUnpluggedWithoutChargingCheck() {
+        // Auto mode adds no power requirement of its own: armed with the
+        // battery checks off, being unplugged must not keep keep-awake off.
+        XCTAssertEqual(AutoEnablePolicy.target(
+            armed: true, currentlyEnabled: false,
+            battery: BatteryInfo(percent: 90, onAC: false),
+            thermalSerious: false, settings: auto), true)
+    }
+
+    func testTargetTurnsOffWhenUnpluggedWithOnlyWhileCharging() {
+        var s = auto
+        s.onlyWhileCharging = true
         XCTAssertEqual(AutoEnablePolicy.target(
             armed: true, currentlyEnabled: true,
             battery: BatteryInfo(percent: 90, onAC: false),
+            thermalSerious: false, settings: s), false)
+    }
+    func testTargetTurnsOffWhenPowerBecomesUnknown() {
+        XCTAssertEqual(AutoEnablePolicy.target(
+            armed: true, currentlyEnabled: true,
+            battery: .unknown,
             thermalSerious: false, settings: auto), false)
     }
+
 
     func testTargetTurnsOffWhenDisarmed() {
         XCTAssertEqual(AutoEnablePolicy.target(
@@ -150,10 +187,12 @@ final class SafetyEvaluatorTests: XCTestCase {
             armed: false, currentlyEnabled: false,
             battery: BatteryInfo(percent: 90, onAC: true),
             thermalSerious: false, settings: auto))
+        var s = auto
+        s.onlyWhileCharging = true
         XCTAssertNil(AutoEnablePolicy.target(
             armed: true, currentlyEnabled: false,
             battery: BatteryInfo(percent: 90, onAC: false),
-            thermalSerious: false, settings: auto))
+            thermalSerious: false, settings: s))
     }
 
     /// Armed and plugged in, but the cutoff can't fire on power — so it stays on.
@@ -171,28 +210,17 @@ final class SafetyEvaluatorTests: XCTestCase {
     func testAllUnmetReasonsEmptyWhenSafeOnPower() {
         let info = BatteryInfo(percent: 80, onAC: true)
         XCTAssertTrue(SafetyEvaluator.allUnmetReasons(
-            battery: info, thermalSerious: false, settings: defaults, requirePower: true).isEmpty)
+            battery: info, thermalSerious: false, settings: defaults).isEmpty)
     }
 
-    func testAllUnmetReasonsListsPowerAndBatteryOffPower() {
+    func testAllUnmetReasonsListsChargingAndBatteryOffPower() {
         var s = defaults
+        s.onlyWhileCharging = true
         s.lowBatteryThreshold = 50
         let info = BatteryInfo(percent: 34, onAC: false)
         let reasons = SafetyEvaluator.allUnmetReasons(
-            battery: info, thermalSerious: false, settings: s, requirePower: true)
-        XCTAssertEqual(reasons, [.notOnPower, .lowBattery(34)])
-    }
-
-    func testAllUnmetReasonsDedupesPowerBullet() {
-        // With requirePower and onlyWhileCharging both implying power, only the
-        // power bullet appears — never both it and .notCharging.
-        var s = defaults
-        s.onlyWhileCharging = true
-        s.lowBatteryThreshold = 0
-        let info = BatteryInfo(percent: 90, onAC: false)
-        let reasons = SafetyEvaluator.allUnmetReasons(
-            battery: info, thermalSerious: false, settings: s, requirePower: true)
-        XCTAssertEqual(reasons, [.notOnPower])
+            battery: info, thermalSerious: false, settings: s)
+        XCTAssertEqual(reasons, [.notCharging, .lowBattery(34)])
     }
 
     /// `reasonToDisable` and `allUnmetReasons` share one low-battery predicate;
@@ -206,8 +234,7 @@ final class SafetyEvaluatorTests: XCTestCase {
             let single = SafetyEvaluator.reasonToDisable(
                 battery: info, thermalSerious: false, settings: s) == .lowBattery(percent)
             let listed = SafetyEvaluator.allUnmetReasons(
-                battery: info, thermalSerious: false, settings: s,
-                requirePower: false).contains(.lowBattery(percent))
+                battery: info, thermalSerious: false, settings: s).contains(.lowBattery(percent))
             XCTAssertEqual(single, listed, "disagreement at \(percent)%")
         }
     }
@@ -215,9 +242,165 @@ final class SafetyEvaluatorTests: XCTestCase {
     func testAllUnmetReasonsIncludesThermal() {
         let info = BatteryInfo(percent: 90, onAC: false)
         let reasons = SafetyEvaluator.allUnmetReasons(
-            battery: info, thermalSerious: true, settings: defaults, requirePower: true)
+            battery: info, thermalSerious: true, settings: defaults)
         XCTAssertEqual(reasons.first, .highThermal)
-        XCTAssertTrue(reasons.contains(.notOnPower))
+    }
+
+    // MARK: HelperOwnershipRecoveryPolicy
+    //
+    // `AppState.recoverOwnershipAfterRepair` cannot be linked into this test
+    // target directly, so these drive the smallest production decision helper
+    // it defers to — `HelperOwnershipRecoveryPolicy.action` — with the exact inputs
+    // `AppState` passes it, not a re-implemented condition that could quietly
+    // drift from the real one.
+
+    /// Auto mode, disarmed: `armed == false` is authoritative OFF even though
+    /// the shown state claims on — a stale observation from the daemon a
+    /// repair just replaced must never be trusted as intent.
+    func testRecoveryWritesOffWhenAutoModeDisarmedDespiteStaleShownOn() {
+        XCTAssertEqual(HelperOwnershipRecoveryPolicy.action(
+            shownEnabled: true,
+            outstandingTarget: nil,
+            settings: auto,
+            armed: false,
+            battery: BatteryInfo(percent: 80, onAC: true),
+            thermalSerious: false), .writeOff)
+    }
+
+    /// Auto mode, armed, but a safety check currently blocks activation: still
+    /// an authoritative OFF, independent of the shown state.
+    func testRecoveryWritesOffWhenAutoModeArmedButPolicyBlocks() {
+        var s = auto
+        s.onlyWhileCharging = true
+        XCTAssertEqual(HelperOwnershipRecoveryPolicy.action(
+            shownEnabled: true,
+            outstandingTarget: nil,
+            settings: s,
+            armed: true,
+            battery: BatteryInfo(percent: 80, onAC: false),
+            thermalSerious: false), .writeOff)
+    }
+
+    /// Auto mode, armed, and the policy allows activation: resume heartbeating
+    /// instead of writing — ON remains the live, currently-allowed intent.
+    func testRecoveryHeartbeatsWhenAutoModeArmedAndPolicyAllows() {
+        XCTAssertEqual(HelperOwnershipRecoveryPolicy.action(
+            shownEnabled: true,
+            outstandingTarget: nil,
+            settings: auto,
+            armed: true,
+            battery: BatteryInfo(percent: 80, onAC: true),
+            thermalSerious: false), .heartbeat)
+    }
+
+    /// Manual mode: the shown state is the only intent, so a shown-on recovers
+    /// to a heartbeat.
+    func testRecoveryHeartbeatsInManualModeWhenShownOn() {
+        XCTAssertEqual(HelperOwnershipRecoveryPolicy.action(
+            shownEnabled: true,
+            outstandingTarget: nil,
+            settings: defaults,
+            armed: false,
+            battery: BatteryInfo(percent: 80, onAC: true),
+            thermalSerious: false), .heartbeat)
+    }
+
+    /// Manual mode, shown off: writes off (idempotently) rather than
+    /// heartbeating a state that isn't live.
+    func testRecoveryWritesOffInManualModeWhenShownOff() {
+        XCTAssertEqual(HelperOwnershipRecoveryPolicy.action(
+            shownEnabled: false,
+            outstandingTarget: nil,
+            settings: defaults,
+            armed: false,
+            battery: BatteryInfo(percent: 80, onAC: true),
+            thermalSerious: false), .writeOff)
+    }
+
+    /// Manual mode, shown on, but an OFF write was already dispatched and
+    /// hasn't resolved yet: the outstanding write is the more recent decision
+    /// and must win over the stale shown-on, so recovery must not heartbeat
+    /// ahead of it.
+    func testRecoveryWritesOffWhenOutstandingTargetIsOffDespiteShownOn() {
+        XCTAssertEqual(HelperOwnershipRecoveryPolicy.action(
+            shownEnabled: true,
+            outstandingTarget: false,
+            settings: defaults,
+            armed: false,
+            battery: BatteryInfo(percent: 80, onAC: true),
+            thermalSerious: false), .writeOff)
+    }
+
+    /// The same outstanding OFF veto applies in auto mode too, even when
+    /// armed and otherwise safe.
+    func testRecoveryWritesOffWhenAutoModeHasOutstandingOffDespiteArmedAndSafe() {
+        XCTAssertEqual(HelperOwnershipRecoveryPolicy.action(
+            shownEnabled: true,
+            outstandingTarget: false,
+            settings: auto,
+            armed: true,
+            battery: BatteryInfo(percent: 80, onAC: true),
+            thermalSerious: false), .writeOff)
+    }
+
+    /// Manual mode still respects the live safety policy: high thermal blocks
+    /// heartbeat recovery even when the shown state is on.
+    func testRecoveryWritesOffInManualModeWhenHighThermalBlocks() {
+        XCTAssertEqual(HelperOwnershipRecoveryPolicy.action(
+            shownEnabled: true,
+            outstandingTarget: nil,
+            settings: defaults,
+            armed: false,
+            battery: BatteryInfo(percent: 80, onAC: true),
+            thermalSerious: true), .writeOff)
+    }
+
+    /// Manual mode: low battery at or below the cutoff blocks recovery.
+    func testRecoveryWritesOffInManualModeWhenLowBatteryBlocks() {
+        XCTAssertEqual(HelperOwnershipRecoveryPolicy.action(
+            shownEnabled: true,
+            outstandingTarget: nil,
+            settings: defaults,
+            armed: false,
+            battery: BatteryInfo(percent: defaults.lowBatteryThreshold, onAC: false),
+            thermalSerious: false), .writeOff)
+    }
+
+    /// Manual mode: unknown power source with active checks blocks recovery.
+    func testRecoveryWritesOffInManualModeWhenPowerSourceUnavailableBlocks() {
+        XCTAssertEqual(HelperOwnershipRecoveryPolicy.action(
+            shownEnabled: true,
+            outstandingTarget: nil,
+            settings: defaults,
+            armed: false,
+            battery: .unknown,
+            thermalSerious: false), .writeOff)
+    }
+
+    /// Manual mode: "only while charging" on battery blocks recovery.
+    func testRecoveryWritesOffInManualModeWhenChargingPolicyBlocks() {
+        var s = defaults
+        s.onlyWhileCharging = true
+        XCTAssertEqual(HelperOwnershipRecoveryPolicy.action(
+            shownEnabled: true,
+            outstandingTarget: nil,
+            settings: s,
+            armed: false,
+            battery: BatteryInfo(percent: 80, onAC: false),
+            thermalSerious: false), .writeOff)
+    }
+
+    /// An outstanding ON target does not itself authorize a heartbeat in auto
+    /// mode — `armed` plus the live policy still decide, independent of
+    /// whatever write is in flight.
+    func testRecoveryIgnoresOutstandingOnTargetInAutoModeWhenDisarmed() {
+        XCTAssertEqual(HelperOwnershipRecoveryPolicy.action(
+            shownEnabled: false,
+            outstandingTarget: true,
+            settings: auto,
+            armed: false,
+            battery: BatteryInfo(percent: 80, onAC: true),
+            thermalSerious: false), .writeOff)
     }
 
     // MARK: SettingsStore
