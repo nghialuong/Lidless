@@ -230,3 +230,56 @@ public enum AutoEnablePolicy {
                                                settings: settings) == nil
     }
 }
+
+/// The decision a fresh (post-repair) helper has to make about ownership of
+/// the keep-awake watchdog.
+///
+/// `shownEnabled` — the app's displayed `isEnabled` — is only ever a report of
+/// what the *old*, now-replaced daemon was last observed doing. It is not the
+/// user's intent, and trusting it directly is exactly how a stale "on" survives
+/// a repair that happened because the old daemon had already stopped doing
+/// anything reliable. The authoritative intent is:
+///
+/// - In auto mode, `armed` plus the currently-enabled safety checks — the same
+///   policy `reconcile()` and the power-notification path already use. `armed
+///   == false` is OFF regardless of what the stale flag or `shownEnabled`
+///   claims.
+/// - In manual mode, the shown state remains the intent source, but it is
+///   still gated by the same live safety checks and by any outstanding OFF
+///   write (one already dispatched and not yet resolved when the repair's
+///   recovery fired). A heartbeat must not race ahead of either and assert
+///   ownership for a state the app is actively trying (or required) to leave.
+public enum HelperOwnershipRecoveryPolicy {
+    public enum Action: Equatable {
+        /// Resume heartbeating: ON remains the live, currently-allowed intent.
+        case heartbeat
+        /// Issue an explicit OFF write through the recovered helper. Covers
+        /// every case where ON is not the authoritative intent — auto mode
+        /// disarmed or blocked by a safety check, an outstanding OFF target,
+        /// or the shown state already being off.
+        case writeOff
+    }
+
+    /// First gate for both modes: an outstanding OFF write or any current
+    /// safety blocker forces OFF. Then mode intent decides: auto mode consults
+    /// `armed`, manual mode consults `shownEnabled`.
+    public static func action(shownEnabled: Bool,
+                              outstandingTarget: Bool?,
+                              settings: SafetySettings,
+                              armed: Bool,
+                              battery: BatteryInfo,
+                              thermalSerious: Bool) -> Action {
+        // The newest in-flight intent wins in both modes.
+        if outstandingTarget == false { return .writeOff }
+        // A live safety blocker always wins over stale shown state or arming.
+        if SafetyEvaluator.reasonToDisable(battery: battery,
+                                           thermalSerious: thermalSerious,
+                                           settings: settings) != nil {
+            return .writeOff
+        }
+        if settings.autoEnableWhenCharging {
+            return armed ? .heartbeat : .writeOff
+        }
+        return shownEnabled ? .heartbeat : .writeOff
+    }
+}

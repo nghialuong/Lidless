@@ -88,7 +88,14 @@ Running with the lid closed under heavy load can heat the machine and drain the 
 Keep it plugged in and ventilated. The safety guards auto-pause on heat / low battery,
 and a reboot always resets the underlying flag.
 
-To report a security issue, see [SECURITY.md](SECURITY.md).
+### Helper not responding after an update
+An app update re-signs the helper binary; launchd can keep a stale launch
+record and refuse to start it. Lidless detects this and shows **"Helper not
+responding"** in the popover, Settings, and onboarding, with a **Reinstall**
+button — click it once, approve in System Settings ▸ Login Items if asked, and
+the helper is rebuilt. A failed or unapproved repair is retried on the next
+launch; keep-awake state is re-established through the fresh helper after the
+reinstall, never left unowned.
 
 ## Support
 

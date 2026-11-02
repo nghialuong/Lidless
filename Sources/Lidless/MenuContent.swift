@@ -54,6 +54,20 @@ struct MenuContent: View {
                 .padding(.horizontal, hInset)
                 .padding(.vertical, 10)
 
+            if state.helperHealth == .unreachable {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Label("The background helper isn’t responding.", systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 8)
+                    Button("Reinstall") { state.repairHelper() }
+                        .controlSize(.small)
+                }
+                .padding(.horizontal, hInset)
+                .padding(.bottom, 10)
+            }
+
             // Three disjoint slots, strongest first: something changed the flag
             // behind our back, we couldn't confirm our own change, and the
             // ordinary error/safety note.
@@ -95,7 +109,10 @@ struct MenuContent: View {
         .frame(width: 360)
         // The popover is the moment the user actually looks at the picker, so
         // it's the moment it most needs to be true.
-        .onAppear { state.refreshState() }
+        .onAppear {
+            state.refreshState()
+            state.checkHelperNow()
+        }
     }
 }
 
@@ -249,15 +266,28 @@ private struct KeepAwakeDurationRow: View {
 private struct StatusStrip: View {
     @EnvironmentObject var state: AppState
 
+    private var helperHealthy: Bool { state.helperHealth == .healthy }
+
+    private var helperStatusText: String {
+        switch state.helperHealth {
+        case .checking: return "Checking helper…"
+        case .unreachable: return "Helper not responding"
+        case .healthy: return "Helper active"
+        // Registration booleans describe the rest; the popover's helper is
+        // only ever installed when it can be used.
+        case .notInstalled, .needsApproval: return "Helper inactive"
+        }
+    }
+
     var body: some View {
         HStack(spacing: 12) {
             HStack(spacing: 6) {
-                Image(systemName: state.usingHelper ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                    .foregroundStyle(state.usingHelper ? .green : .orange)
-                Text(state.usingHelper ? "Helper active" : "Helper inactive")
+                Image(systemName: helperHealthy ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                    .foregroundStyle(helperHealthy ? .green : .orange)
+                Text(helperStatusText)
             }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel(state.usingHelper ? "Background helper active" : "Background helper inactive")
+            .accessibilityLabel("Background helper: \(helperStatusText)")
 
             Spacer(minLength: 12)
 

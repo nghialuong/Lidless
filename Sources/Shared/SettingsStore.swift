@@ -131,10 +131,13 @@ public struct SettingsStore {
         defaults.set(resume, forKey: Key.resumeOnboarding)
     }
 
-    /// The app build (`CFBundleVersion`) for which the privileged helper was last
-    /// (re-)registered. Used to refresh the launchd registration after an update,
-    /// so the daemon keeps launching with the new binary's requirement. Empty
-    /// until the first registration.
+    /// Content fingerprint (build number + binary hash) of the helper binary
+    /// last verified healthy. A changed fingerprint tells the next launch that
+    /// this binary was never probed, so an unreachable daemon gets its launchd
+    /// registration rebuilt. Written only after a healthy probe or a verified
+    /// post-repair recovery — never on a pending approval or registration
+    /// error, so a failed repair is retried on the next launch. Empty until
+    /// the first verified probe.
     public func loadLastHelperBuild() -> String {
         defaults.string(forKey: Key.helperBuild) ?? ""
     }

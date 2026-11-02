@@ -246,6 +246,163 @@ final class SafetyEvaluatorTests: XCTestCase {
         XCTAssertEqual(reasons.first, .highThermal)
     }
 
+    // MARK: HelperOwnershipRecoveryPolicy
+    //
+    // `AppState.recoverOwnershipAfterRepair` cannot be linked into this test
+    // target directly, so these drive the smallest production decision helper
+    // it defers to — `HelperOwnershipRecoveryPolicy.action` — with the exact inputs
+    // `AppState` passes it, not a re-implemented condition that could quietly
+    // drift from the real one.
+
+    /// Auto mode, disarmed: `armed == false` is authoritative OFF even though
+    /// the shown state claims on — a stale observation from the daemon a
+    /// repair just replaced must never be trusted as intent.
+    func testRecoveryWritesOffWhenAutoModeDisarmedDespiteStaleShownOn() {
+        XCTAssertEqual(HelperOwnershipRecoveryPolicy.action(
+            shownEnabled: true,
+            outstandingTarget: nil,
+            settings: auto,
+            armed: false,
+            battery: BatteryInfo(percent: 80, onAC: true),
+            thermalSerious: false), .writeOff)
+    }
+
+    /// Auto mode, armed, but a safety check currently blocks activation: still
+    /// an authoritative OFF, independent of the shown state.
+    func testRecoveryWritesOffWhenAutoModeArmedButPolicyBlocks() {
+        var s = auto
+        s.onlyWhileCharging = true
+        XCTAssertEqual(HelperOwnershipRecoveryPolicy.action(
+            shownEnabled: true,
+            outstandingTarget: nil,
+            settings: s,
+            armed: true,
+            battery: BatteryInfo(percent: 80, onAC: false),
+            thermalSerious: false), .writeOff)
+    }
+
+    /// Auto mode, armed, and the policy allows activation: resume heartbeating
+    /// instead of writing — ON remains the live, currently-allowed intent.
+    func testRecoveryHeartbeatsWhenAutoModeArmedAndPolicyAllows() {
+        XCTAssertEqual(HelperOwnershipRecoveryPolicy.action(
+            shownEnabled: true,
+            outstandingTarget: nil,
+            settings: auto,
+            armed: true,
+            battery: BatteryInfo(percent: 80, onAC: true),
+            thermalSerious: false), .heartbeat)
+    }
+
+    /// Manual mode: the shown state is the only intent, so a shown-on recovers
+    /// to a heartbeat.
+    func testRecoveryHeartbeatsInManualModeWhenShownOn() {
+        XCTAssertEqual(HelperOwnershipRecoveryPolicy.action(
+            shownEnabled: true,
+            outstandingTarget: nil,
+            settings: defaults,
+            armed: false,
+            battery: BatteryInfo(percent: 80, onAC: true),
+            thermalSerious: false), .heartbeat)
+    }
+
+    /// Manual mode, shown off: writes off (idempotently) rather than
+    /// heartbeating a state that isn't live.
+    func testRecoveryWritesOffInManualModeWhenShownOff() {
+        XCTAssertEqual(HelperOwnershipRecoveryPolicy.action(
+            shownEnabled: false,
+            outstandingTarget: nil,
+            settings: defaults,
+            armed: false,
+            battery: BatteryInfo(percent: 80, onAC: true),
+            thermalSerious: false), .writeOff)
+    }
+
+    /// Manual mode, shown on, but an OFF write was already dispatched and
+    /// hasn't resolved yet: the outstanding write is the more recent decision
+    /// and must win over the stale shown-on, so recovery must not heartbeat
+    /// ahead of it.
+    func testRecoveryWritesOffWhenOutstandingTargetIsOffDespiteShownOn() {
+        XCTAssertEqual(HelperOwnershipRecoveryPolicy.action(
+            shownEnabled: true,
+            outstandingTarget: false,
+            settings: defaults,
+            armed: false,
+            battery: BatteryInfo(percent: 80, onAC: true),
+            thermalSerious: false), .writeOff)
+    }
+
+    /// The same outstanding OFF veto applies in auto mode too, even when
+    /// armed and otherwise safe.
+    func testRecoveryWritesOffWhenAutoModeHasOutstandingOffDespiteArmedAndSafe() {
+        XCTAssertEqual(HelperOwnershipRecoveryPolicy.action(
+            shownEnabled: true,
+            outstandingTarget: false,
+            settings: auto,
+            armed: true,
+            battery: BatteryInfo(percent: 80, onAC: true),
+            thermalSerious: false), .writeOff)
+    }
+
+    /// Manual mode still respects the live safety policy: high thermal blocks
+    /// heartbeat recovery even when the shown state is on.
+    func testRecoveryWritesOffInManualModeWhenHighThermalBlocks() {
+        XCTAssertEqual(HelperOwnershipRecoveryPolicy.action(
+            shownEnabled: true,
+            outstandingTarget: nil,
+            settings: defaults,
+            armed: false,
+            battery: BatteryInfo(percent: 80, onAC: true),
+            thermalSerious: true), .writeOff)
+    }
+
+    /// Manual mode: low battery at or below the cutoff blocks recovery.
+    func testRecoveryWritesOffInManualModeWhenLowBatteryBlocks() {
+        XCTAssertEqual(HelperOwnershipRecoveryPolicy.action(
+            shownEnabled: true,
+            outstandingTarget: nil,
+            settings: defaults,
+            armed: false,
+            battery: BatteryInfo(percent: defaults.lowBatteryThreshold, onAC: false),
+            thermalSerious: false), .writeOff)
+    }
+
+    /// Manual mode: unknown power source with active checks blocks recovery.
+    func testRecoveryWritesOffInManualModeWhenPowerSourceUnavailableBlocks() {
+        XCTAssertEqual(HelperOwnershipRecoveryPolicy.action(
+            shownEnabled: true,
+            outstandingTarget: nil,
+            settings: defaults,
+            armed: false,
+            battery: .unknown,
+            thermalSerious: false), .writeOff)
+    }
+
+    /// Manual mode: "only while charging" on battery blocks recovery.
+    func testRecoveryWritesOffInManualModeWhenChargingPolicyBlocks() {
+        var s = defaults
+        s.onlyWhileCharging = true
+        XCTAssertEqual(HelperOwnershipRecoveryPolicy.action(
+            shownEnabled: true,
+            outstandingTarget: nil,
+            settings: s,
+            armed: false,
+            battery: BatteryInfo(percent: 80, onAC: false),
+            thermalSerious: false), .writeOff)
+    }
+
+    /// An outstanding ON target does not itself authorize a heartbeat in auto
+    /// mode — `armed` plus the live policy still decide, independent of
+    /// whatever write is in flight.
+    func testRecoveryIgnoresOutstandingOnTargetInAutoModeWhenDisarmed() {
+        XCTAssertEqual(HelperOwnershipRecoveryPolicy.action(
+            shownEnabled: false,
+            outstandingTarget: true,
+            settings: auto,
+            armed: false,
+            battery: BatteryInfo(percent: 80, onAC: true),
+            thermalSerious: false), .writeOff)
+    }
+
     // MARK: SettingsStore
 
     func testSettingsStoreDefaultsWhenUnseeded() {

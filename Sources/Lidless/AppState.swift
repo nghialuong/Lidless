@@ -32,6 +32,11 @@ final class AppState: ObservableObject {
     @Published var isEnabled = false
     @Published var helperInstalled = false
     @Published var helperNeedsApproval = false
+    /// Full lifecycle state of the privileged helper, driven by
+    /// `helperLifecycle` and shown the same way in popover, Settings, and
+    /// onboarding. Registration booleans alone can't tell "registered but
+    /// launchd refuses to start it" from healthy.
+    @Published var helperHealth: HelperHealth = .notInstalled
     @Published var batteryDescription = ""
     /// Current battery charge (0–100) and whether on AC power. Drives the
     /// popover status strip (icon + "Battery 74%").
@@ -173,6 +178,8 @@ final class AppState: ObservableObject {
     /// Polling can recover display state but cannot authorize charging-gated ON.
     private var powerNotificationsActive = false
     private var onboardingActive = false
+    private var helperLifecycle: HelperRepairCoordinator!
+    private var cachedHelperFingerprint: String?
     private var didBecomeActiveObserver: NSObjectProtocol?
 
     init() {
@@ -190,8 +197,34 @@ final class AppState: ObservableObject {
         autoOffMinutes = store.loadAutoOffMinutes()
         onboardingComplete = store.loadOnboardingComplete()
         launchAtLogin = loginItem.isEnabled
+        helperLifecycle = HelperRepairCoordinator(
+            registration: { [weak self] in
+                guard let self else { return .absent }
+                return self.helper.registration
+            },
+            savedFingerprint: { [weak self] in self?.store.loadLastHelperBuild() ?? "" },
+            saveFingerprint: { [weak self] in self?.store.saveLastHelperBuild($0) },
+            probe: { [weak self] done in
+                self?.helper.checkReachable { done($0) }
+            },
+            repair: { [weak self] done in
+                self?.helper.reregister { done($0) }
+            },
+            publish: { [weak self] snapshot, health in
+                self?.applyRegistration(snapshot, probeHealth: health)
+            },
+            scheduleVerification: { [weak self] in
+                // Give launchd a moment to spawn the fresh job before the
+                // verification probe.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                    self?.verifyAfterRepair()
+                }
+            },
+            repairOutcome: { [weak self] in self?.handleRepairOutcome($0) },
+            verifiedRecovery: { [weak self] in self?.recoverOwnershipAfterRepair() }
+        )
         refreshHelperStatus()
-        refreshHelperRegistrationIfUpdated()
+        probeHelperAtLaunch()
         helperWasUsable = usingHelper
         // Subscribe before the first sample. Without this live source, polling is
         // recovery-only and charging-gated activation stays fail-closed.
@@ -467,10 +500,50 @@ final class AppState: ObservableObject {
 
     // MARK: Helper lifecycle
 
-    func refreshHelperStatus() {
-        helperInstalled = helper.isEnabled
-        helperNeedsApproval = helper.requiresApproval
+    /// Last registration represented by the published helper booleans.
+    private var publishedHelperRegistration: HelperRepairCoordinator.Registration {
+        if helperInstalled { return .enabled }
+        return helperNeedsApproval ? .pending : .absent
+    }
+
+    /// Single authority for helper registration -> published state.
+    ///
+    /// Every path (coordinator publishes, install/open/recheck refreshes) must
+    /// converge here so all surfaces stay consistent from one registration
+    /// snapshot: booleans and health are set synchronously from the same read.
+    ///
+    /// `probeHealth` is only meaningful when `snapshot == .enabled`, where a
+    /// probe can distinguish checking/healthy/unreachable. For non-enabled
+    /// snapshots, registration is terminal and overrides any stale probe verdict.
+    private func applyRegistration(_ snapshot: HelperRepairCoordinator.Registration,
+                                   probeHealth: HelperHealth? = nil) {
+        let previous = publishedHelperRegistration
+        helperInstalled = snapshot == .enabled
+        helperNeedsApproval = snapshot == .pending
         usingHelper = helperInstalled
+
+        switch snapshot {
+        case .absent:
+            helperHealth = .notInstalled
+        case .pending:
+            helperHealth = .needsApproval
+        case .enabled:
+            if let probeHealth,
+               probeHealth == .checking || probeHealth == .healthy || probeHealth == .unreachable {
+                helperHealth = probeHealth
+            } else if previous != .enabled ||
+                        !(helperHealth == .checking || helperHealth == .healthy || helperHealth == .unreachable) {
+                helperHealth = .checking
+            }
+        }
+    }
+
+    /// Apply one read of the SMAppService registration to all helper UI state.
+    @discardableResult
+    func refreshHelperStatus() -> HelperRepairCoordinator.Registration {
+        let snapshot = helper.registration
+        applyRegistration(snapshot)
+        return snapshot
     }
 
     /// The app's current build number (`CFBundleVersion`).
@@ -478,37 +551,125 @@ final class AppState: ObservableObject {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
     }
 
-    private func storeCurrentHelperBuild() {
-        store.saveLastHelperBuild(currentBuild)
+    /// Content identity of the embedded helper binary (build + content hash).
+    /// A re-sign or rebuild at the same version still changes the file, and
+    /// launchd's stored job goes stale with it. The embedded binary cannot
+    /// change while this process runs, so the hash is computed once.
+    private var helperFingerprint: String {
+        if let cachedHelperFingerprint { return cachedHelperFingerprint }
+        let url = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/LidlessHelper")
+        let fingerprint = HelperFingerprint.compute(build: currentBuild,
+                                                    binary: try? Data(contentsOf: url))
+        cachedHelperFingerprint = fingerprint
+        return fingerprint
     }
 
-    /// After an app update the helper binary is re-signed and its launchd job can
-    /// keep a stale launch record, so the daemon fails to start (EX_CONFIG) and
-    /// XPC calls hang — the toggle then silently does nothing. On the first launch
-    /// of a new build, probe the registered daemon; only if it's unreachable do we
-    /// rebuild its registration (which may require re-approval). Healthy updates
-    /// are left untouched, so they don't needlessly prompt for approval.
-    private func refreshHelperRegistrationIfUpdated() {
+    /// Probe entry points for the coordinator. All lifecycle decisions —
+    /// when a probe may auto-repair, when the fingerprint may be persisted —
+    /// live in `HelperRepairCoordinator`.
+    private func probeHelperAtLaunch() {
         guard !currentBuild.isEmpty else { return }
-        guard store.loadLastHelperBuild() != currentBuild else { return }
-        storeCurrentHelperBuild()
-        guard helper.isEnabled else { return }
-        helper.checkReachable { [weak self] reachable in
-            guard let self, !reachable else { return }
-            self.repairHelper()
+        helperLifecycle.checkAtLaunch(fingerprint: helperFingerprint)
+    }
+
+    func checkHelperNow() {
+        guard !currentBuild.isEmpty else { return }
+        helperLifecycle.checkNow(fingerprint: helperFingerprint)
+    }
+
+    private func verifyAfterRepair() {
+        guard !currentBuild.isEmpty else { return }
+        helperLifecycle.verifyRepair(fingerprint: helperFingerprint)
+    }
+
+    private func handleRepairOutcome(_ outcome: HelperRepairCoordinator.RepairOutcome) {
+        switch outcome {
+        case .registered(let userInitiated):
+            if userInitiated {
+                lastError = "Background helper reinstalled — try the switch again."
+            }
+        case .needsApproval(let userInitiated):
+            lastError = "Approve Lidless in System Settings ▸ Login Items, then try the switch again."
+            // Only a manual repair may pull System Settings to the front; an
+            // automatic repair after an update must not spring dialogs.
+            if userInitiated { helper.openLoginItemsSettings() }
+        case .failed(_, let error):
+            lastError = error
         }
+    }
+
+    /// A repair recovered: the fresh daemon answered its verification probe.
+    /// The daemon that used to own the keep-awake watchdog is gone, so
+    /// re-establish ownership through the existing write/read paths.
+    ///
+    /// `isEnabled` is only a report of what the *old*, now-replaced daemon was
+    /// last observed doing — not the user's intent. In auto mode `armed` plus
+    /// the live safety checks are authoritative: `armed == false` is OFF even
+    /// if the shown state (or a stale `pmset` flag) still says on. An
+    /// outstanding OFF target takes the same priority in manual mode, since a
+    /// write already dispatched is the more recent decision. `HelperOwnershipRecoveryPolicy`
+    /// makes this same call `AppState` can't make by just reading `isEnabled`,
+    /// reusing the identical policy the power-notification path already runs.
+    ///
+    /// A corrective OFF is issued as an explicit write through the recovered
+    /// helper — never left to `refreshState()` alone — because an in-sync
+    /// read-back does not reconcile anything: the real flag can still read
+    /// `true` from the dead daemon's last write, and only a fresh write through
+    /// the new helper actually clears it. Only when ON remains the allowed,
+    /// current intent does recovery resume heartbeating instead.
+    private func recoverOwnershipAfterRepair() {
+        let action = HelperOwnershipRecoveryPolicy.action(
+            shownEnabled: isEnabled,
+            outstandingTarget: activeWriteTarget ?? autoWrite.inFlightTarget,
+            settings: settings,
+            armed: armed,
+            battery: currentBattery,
+            thermalSerious: thermalSerious()
+        )
+        switch action {
+        case .heartbeat:
+            if isEnabled {
+                manageHeartbeat()
+            } else {
+                reconcileNow()
+            }
+        case .writeOff:
+            setEnabled(false, note: "Background helper was reinstalled.", origin: .safety)
+        }
+        refreshState()
     }
 
     /// Re-read helper status; if it just became usable (the user approved it while
     /// the app was running), pick up its keep-awake state and prompt a restart so
     /// the app fully switches onto the privileged helper.
+    ///
+    /// Every registration transition is reclassified here, not just the
+    /// became-usable direction. A helper that was enabled and dropped to
+    /// pending or absent — the user revoked approval, or something unregistered
+    /// it from outside — must flip `helperHealth` away from `.healthy`/
+    /// `.unreachable` too, or the UI keeps showing a state the registration no
+    /// longer supports. `checkHelperNow()` alone can't do this on its own: the
+    /// coordinator drops a `checkNow` while a repair cycle is open, so the
+    /// registration itself has to be re-read unconditionally here first.
     func recheckHelper() {
         let wasUsable = helperWasUsable
         refreshHelperStatus()
         helperWasUsable = usingHelper
-        guard !wasUsable, usingHelper else { return }
+        guard wasUsable != usingHelper else { return }
         refreshState()
-        promptRestartAfterHelperEnabled()
+        // The registration transitioned either direction; re-classify
+        // reachability so the UI never shows a stale verdict for a
+        // registration that no longer supports it.
+        checkHelperNow()
+        if usingHelper { promptRestartAfterHelperEnabled() }
+    }
+
+    /// Re-register the privileged helper to refresh launchd's record. Used both
+    /// automatically (after a detected app update) and from the Reinstall
+    /// affordances; `userInitiated` controls whether the approval step may
+    /// surface System Settings. Decisions live in `HelperRepairCoordinator`.
+    func repairHelper(userInitiated: Bool = true) {
+        helperLifecycle.repair(userInitiated: userInitiated)
     }
 
     /// Tell the user the helper is now active and offer to relaunch. The privileged
@@ -543,28 +704,34 @@ final class AppState: ObservableObject {
         // If the daemon is already registered and just awaiting approval, don't
         // re-register (that throws once pending and would swallow the open) —
         // just take the user to Login Items.
-        if helper.requiresApproval {
-            openLoginItems()
+        if refreshHelperStatus() == .pending {
+            lastError = "Approve Lidless in System Settings ▸ Login Items."
+            helper.openLoginItemsSettings()
             return
         }
         do {
             try helper.register()
             let wasUsable = helperWasUsable
-            refreshHelperStatus()
-            helperWasUsable = usingHelper
-            if helper.requiresApproval {
+            let snapshot = refreshHelperStatus()
+            if snapshot == .pending {
+                helperWasUsable = usingHelper
                 lastError = "Approve Lidless in System Settings ▸ Login Items."
                 helper.openLoginItemsSettings()
             } else {
                 lastError = nil
-                // Rare: registered and immediately usable (already approved). Treat
-                // it as the same enable transition the approval path would hit.
+                // Rare: registered and immediately usable (already approved). Probe
+                // now so open UI surfaces go checking→verified even if restart is
+                // declined, then handle the usability transition.
+                if snapshot == .enabled { checkHelperNow() }
+                helperWasUsable = usingHelper
                 if !wasUsable, usingHelper {
                     refreshState()
                     promptRestartAfterHelperEnabled()
                 }
             }
         } catch {
+            _ = refreshHelperStatus()
+            helperWasUsable = usingHelper
             lastError = error.localizedDescription
         }
     }
@@ -867,6 +1034,9 @@ final class AppState: ObservableObject {
             setEnabled(false, note: message, origin: .safety)
             return
         }
+        // A failed helper write may mean the daemon died; refresh the popover's
+        // reachability so it doesn't keep showing "Helper active".
+        if helperBacked { checkHelperNow() }
         if origin == .user {
             if helperBacked {
                 presentHelperFailureAlert(message: message)
@@ -923,24 +1093,6 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Re-register the privileged helper to refresh launchd's record, then report
-    /// the outcome. Used both automatically (after a detected app update) and from
-    /// the failure alert's "Reinstall Helper" action.
-    func repairHelper() {
-        helper.reregister { [weak self] error in
-            guard let self else { return }
-            self.refreshHelperStatus()
-            self.storeCurrentHelperBuild()
-            if let error {
-                self.lastError = error.localizedDescription
-            } else if self.helper.requiresApproval {
-                self.lastError = "Approve Lidless in System Settings ▸ Login Items, then try the switch again."
-                self.helper.openLoginItemsSettings()
-            } else {
-                self.lastError = "Background helper reinstalled — try the switch again."
-            }
-        }
-    }
 
     // MARK: Heartbeat (keeps the helper watchdog satisfied)
 
