@@ -18,7 +18,7 @@ struct MenuContent: View {
                 .padding(.horizontal, hInset)
                 .padding(.top, 18)
 
-            Text("Keep your Mac awake when the lid is closed.")
+            Text(L10n.tr("Keep your Mac awake when the lid is closed."))
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -139,9 +139,9 @@ private struct PopoverHeader: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
-            Text("Lidless").font(.headline)
+            Text(L10n.tr("Lidless")).font(.headline)
             Spacer()
-            Text("v\(state.appVersion)")
+            Text(L10n.format("v%@", state.appVersion))
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
@@ -155,10 +155,10 @@ private struct PrimaryToggleRow: View {
     @EnvironmentObject var state: AppState
 
     var body: some View {
-        SettingRow(title: "Keep awake with lid closed",
+        SettingRow(title: L10n.tr("Keep awake with lid closed"),
                    titleFont: .body.weight(.semibold),
                    minHeight: 42) {
-            Toggle("Keep awake with lid closed", isOn: Binding(
+            Toggle(L10n.tr("Keep awake with lid closed"), isOn: Binding(
                 get: { state.masterToggleOn },
                 set: { state.setMasterToggle($0) }
             ))
@@ -184,7 +184,7 @@ private struct KeepAwakeDurationRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            SettingRow(title: "Keep awake for", minHeight: 32) {
+            SettingRow(title: L10n.tr("Keep awake for"), minHeight: 32) {
                 // A Menu of buttons rather than a Picker: a Picker's binding only
                 // fires when the value *changes*, so after a timer had elapsed,
                 // choosing the same duration again would do nothing at all —
@@ -205,14 +205,14 @@ private struct KeepAwakeDurationRow: View {
             }
 
             if !state.autoOffRemaining.isEmpty {
-                Label("Turning off in \(state.autoOffRemaining)", systemImage: "timer")
+                Label(L10n.format("Turning off in %@", state.autoOffRemaining), systemImage: "timer")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             } else if autoMode {
                 // Auto mode decides activation itself, so a countdown would
                 // disarm the feature behind its back. Say so rather than leaving
                 // a control that looks live and does nothing.
-                Text("Not used while “Automatically enable when charging” is on.")
+                Text(L10n.tr("Not used while “Automatically enable when charging” is on."))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -233,20 +233,22 @@ private struct StatusStrip: View {
             HStack(spacing: 6) {
                 Image(systemName: state.usingHelper ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
                     .foregroundStyle(state.usingHelper ? .green : .orange)
-                Text(state.usingHelper ? "Helper active" : "Helper inactive")
+                Text(state.usingHelper ? L10n.tr("Helper active") : L10n.tr("Helper inactive"))
             }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel(state.usingHelper ? "Background helper active" : "Background helper inactive")
+            .accessibilityLabel(state.usingHelper ? L10n.tr("Background helper active") : L10n.tr("Background helper inactive"))
 
             Spacer(minLength: 12)
 
             HStack(spacing: 6) {
                 Image(systemName: batterySymbol)
-                Text("Battery \(state.batteryPercent)%")
+                Text(L10n.format("Battery %d%%", state.batteryPercent))
                     .monospacedDigit()
             }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("Battery \(state.batteryPercent) percent\(state.batteryOnAC ? ", on power" : "")")
+            .accessibilityLabel(state.batteryOnAC
+                ? L10n.format("Battery %d percent, on power", state.batteryPercent)
+                : L10n.format("Battery %d percent", state.batteryPercent))
         }
         .font(.callout)
         .foregroundStyle(.secondary)
@@ -272,13 +274,13 @@ private struct SafetySection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Safety")
+            Text(L10n.tr("Safety"))
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 2)
 
-            SettingRow(title: "Only while charging") {
-                Toggle("Only while charging", isOn: Binding(
+            SettingRow(title: L10n.tr("Only while charging")) {
+                Toggle(L10n.tr("Only while charging"), isOn: Binding(
                     get: { state.settings.onlyWhileCharging },
                     set: { v in var s = state.settings; s.onlyWhileCharging = v; state.updateSettings(s) }
                 ))
@@ -287,8 +289,8 @@ private struct SafetySection: View {
                 .controlSize(.small)
             }
 
-            SettingRow(title: "Pause when running hot") {
-                Toggle("Pause when running hot", isOn: Binding(
+            SettingRow(title: L10n.tr("Pause when running hot")) {
+                Toggle(L10n.tr("Pause when running hot"), isOn: Binding(
                     get: { state.settings.pauseOnHighThermal },
                     set: { v in var s = state.settings; s.pauseOnHighThermal = v; state.updateSettings(s) }
                 ))
@@ -343,11 +345,11 @@ private struct LowBatteryCutoffRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 12) {
-                Text("Low-battery cutoff")
+                Text(L10n.tr("Low-battery cutoff"))
                     .font(.callout)
                     .lineLimit(1)
                 Spacer(minLength: 16)
-                Text(shown == 0 ? "Never" : "\(shown)%")
+                Text(shown == 0 ? L10n.tr("Never") : L10n.format("%d%%", shown))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
@@ -356,9 +358,9 @@ private struct LowBatteryCutoffRow: View {
             Slider(value: value,
                    in: 0...100,
                    step: 5,
-                   label: { Text("Low-battery cutoff") },
-                   minimumValueLabel: { Text("Never").font(.caption2).foregroundStyle(.secondary) },
-                   maximumValueLabel: { Text("100%").font(.caption2).foregroundStyle(.secondary) },
+                   label: { Text(L10n.tr("Low-battery cutoff")) },
+                   minimumValueLabel: { Text(L10n.tr("Never")).font(.caption2).foregroundStyle(.secondary) },
+                   maximumValueLabel: { Text(L10n.format("%d%%", 100)).font(.caption2).foregroundStyle(.secondary) },
                    onEditingChanged: commit)
             .labelsHidden()
             .controlSize(.small)
@@ -381,20 +383,20 @@ private struct AutoDisabledWarning: View {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Image(systemName: "exclamationmark.circle.fill")
                     .foregroundStyle(Color(nsColor: .systemYellow))
-                Text("Automatic mode is on, but keep-awake isn’t active right now.")
+                Text(L10n.tr("Automatic mode is on, but keep-awake isn’t active right now."))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .font(.callout)
 
-            Text("Temporarily disabled because the following check(s) failed:")
+            Text(L10n.tr("Temporarily disabled because the following check(s) failed:"))
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(Array(reasons.enumerated()), id: \.offset) { _, reason in
-                    Text("• \(reason.checkLabel)")
+                    Text(L10n.format("• %@", reason.checkLabel))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -412,13 +414,13 @@ private struct AutomaticSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Automatic")
+            Text(L10n.tr("Automatic"))
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 2)
 
-            SettingRow(title: "Automatically enable when charging") {
-                Toggle("Automatically enable when charging", isOn: Binding(
+            SettingRow(title: L10n.tr("Automatically enable when charging")) {
+                Toggle(L10n.tr("Automatically enable when charging"), isOn: Binding(
                     get: { state.settings.autoEnableWhenCharging },
                     set: { v in var s = state.settings; s.autoEnableWhenCharging = v; state.updateSettings(s) }
                 ))
@@ -440,7 +442,7 @@ private struct FooterActions: View {
             Button {
                 NSApplication.shared.terminate(nil)
             } label: {
-                Label("Quit Lidless", systemImage: "power")
+                Label(L10n.tr("Quit Lidless"), systemImage: "power")
                     .foregroundStyle(.secondary)
             }
             .keyboardShortcut("q")
@@ -464,7 +466,7 @@ private struct SettingsButton: View {
             MenuBarExtraPanel.dismiss()
             state.showSettings()
         } label: {
-            Label("Settings…", systemImage: "gearshape")
+            Label(L10n.tr("Settings…"), systemImage: "gearshape")
                 .foregroundStyle(.secondary)
         }
         .keyboardShortcut(",", modifiers: .command)

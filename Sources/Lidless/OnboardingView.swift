@@ -46,12 +46,12 @@ struct OnboardingView: View {
                     .frame(width: 88, height: 88)
                     .frame(maxWidth: .infinity, alignment: .center)
             }
-            Text("Welcome to Lidless")
+            Text(L10n.tr("Welcome to Lidless"))
                 .font(.largeTitle.weight(.semibold))
-            Text("Keep your Mac awake — even with the lid closed.")
+            Text(L10n.tr("Keep your Mac awake — even with the lid closed."))
                 .font(.title3)
                 .foregroundStyle(.secondary)
-            Text("Perfect for letting coding agents, downloads, or builds keep running while you close the lid and carry your Mac around. `caffeinate` can't do this — Lidless can.")
+            Text(LocalizedStringKey(L10n.tr("Perfect for letting coding agents, downloads, or builds keep running while you close the lid and carry your Mac around. `caffeinate` can't do this — Lidless can.")))
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -60,13 +60,13 @@ struct OnboardingView: View {
 
     private var howItWorksStep: some View {
         VStack(alignment: .leading, spacing: 20) {
-            header(symbol: "bolt.fill", title: "How it works")
+            header(symbol: "bolt.fill", title: L10n.tr("How it works"))
             VStack(alignment: .leading, spacing: 16) {
-                bullet("macbook", "Overrides the lid-close sleep that normally stops everything when you shut the lid.")
-                bullet("thermometer.medium", "Auto-pauses if the Mac runs hot or the battery runs low — so it stays safe unattended.")
-                bullet("shield.lefthalf.filled", "A watchdog restores normal sleep if Lidless ever quits or crashes, so your Mac can never get stuck awake.")
+                bullet("macbook", L10n.tr("Overrides the lid-close sleep that normally stops everything when you shut the lid."))
+                bullet("thermometer.medium", L10n.tr("Auto-pauses if the Mac runs hot or the battery runs low — so it stays safe unattended."))
+                bullet("shield.lefthalf.filled", L10n.tr("A watchdog restores normal sleep if Lidless ever quits or crashes, so your Mac can never get stuck awake."))
             }
-            Label("Keep your Mac plugged in and ventilated under heavy use.", systemImage: "info.circle")
+            Label(L10n.tr("Keep your Mac plugged in and ventilated under heavy use."), systemImage: "info.circle")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .padding(.top, 4)
@@ -75,15 +75,15 @@ struct OnboardingView: View {
 
     private var helperStep: some View {
         VStack(alignment: .leading, spacing: 20) {
-            header(symbol: "key.fill", title: "Skip the password prompts")
-            Text("Install a small background helper so turning keep-awake on and off never asks for your admin password — and the safety watchdog can run.")
+            header(symbol: "key.fill", title: L10n.tr("Skip the password prompts"))
+            Text(L10n.tr("Install a small background helper so turning keep-awake on and off never asks for your admin password — and the safety watchdog can run."))
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             helperStatusBox
 
-            Text("Optional — Lidless still works without it; it'll just ask for your password each time you toggle.")
+            Text(L10n.tr("Optional — Lidless still works without it; it'll just ask for your password each time you toggle."))
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -94,15 +94,15 @@ struct OnboardingView: View {
     private var helperStatusBox: some View {
         VStack(alignment: .leading, spacing: 10) {
             if state.usingHelper {
-                Label("Background helper installed and active.", systemImage: "checkmark.circle.fill")
+                Label(L10n.tr("Background helper installed and active."), systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
             } else if state.helperNeedsApproval {
-                Label("Approve Lidless under System Settings ▸ Login Items, then come back here.", systemImage: "exclamationmark.circle.fill")
+                Label(L10n.tr("Approve Lidless under System Settings ▸ Login Items, then come back here."), systemImage: "exclamationmark.circle.fill")
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
-                Button("Open Login Items to approve…") { state.installHelper() }
+                Button(L10n.tr("Open Login Items to approve…")) { state.installHelper() }
             } else {
-                Button("Install background helper…") { state.installHelper() }
+                Button(L10n.tr("Install background helper…")) { state.installHelper() }
                     .buttonStyle(.borderedProminent)
             }
 
@@ -120,13 +120,13 @@ struct OnboardingView: View {
 
     private var doneStep: some View {
         VStack(alignment: .leading, spacing: 16) {
-            header(symbol: "checkmark.circle.fill", title: "You're all set")
-            Text("Click the Lidless icon in the menu bar and flip **Keep awake with lid closed** whenever you need it. Safety options live in Settings.")
+            header(symbol: "checkmark.circle.fill", title: L10n.tr("You're all set"))
+            Text(LocalizedStringKey(L10n.tr("Click the Lidless icon in the menu bar and flip **Keep awake with lid closed** whenever you need it. Safety options live in Settings.")))
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Toggle("Launch Lidless at login", isOn: Binding(
+            Toggle(L10n.tr("Launch Lidless at login"), isOn: Binding(
                 get: { state.launchAtLogin },
                 set: { state.setLaunchAtLogin($0) }
             ))
@@ -139,7 +139,7 @@ struct OnboardingView: View {
 
     private var footer: some View {
         HStack {
-            Button("Back") {
+            Button(L10n.tr("Back")) {
                 withAnimation { step -= 1 }
             }
             .disabled(step == 0)
@@ -157,7 +157,7 @@ struct OnboardingView: View {
 
             Spacer()
 
-            Button(step == lastStep ? "Done" : "Continue") {
+            Button(step == lastStep ? L10n.tr("Done") : L10n.tr("Continue")) {
                 if step == lastStep {
                     state.completeOnboarding()
                 } else {

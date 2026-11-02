@@ -43,7 +43,7 @@ public struct BatteryInfo: Equatable {
         self.onAC = onAC
     }
 
-    public var source: String { onAC ? "AC" : "Battery" }
+    public var source: String { onAC ? L10n.tr("AC") : L10n.tr("Battery") }
 }
 
 public enum BatteryParsers {

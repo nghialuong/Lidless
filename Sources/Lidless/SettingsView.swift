@@ -10,38 +10,50 @@ struct SettingsView: View {
 
     @EnvironmentObject var state: AppState
     @EnvironmentObject var updater: UpdaterController
+    @State private var interfaceLanguage = InterfaceLanguage.current()
 
     private let repoURL = URL(string: "https://github.com/nghialuong/Lidless")!
 
     var body: some View {
         Form {
-            Section("General") {
-                Toggle("Launch at login", isOn: Binding(
+            Section(L10n.tr("General")) {
+                Toggle(L10n.tr("Launch at login"), isOn: Binding(
                     get: { state.launchAtLogin },
                     set: { state.setLaunchAtLogin($0) }
                 ))
-                Button("Show Setup Guide…") { state.showOnboarding() }
+                Picker(L10n.tr("Language"), selection: $interfaceLanguage) {
+                    ForEach(InterfaceLanguage.allCases, id: \.self) { language in
+                        Text(language.displayName).tag(language)
+                    }
+                }
+                .onChange(of: interfaceLanguage) { language in
+                    state.setInterfaceLanguage(language)
+                }
+                Text(L10n.tr("Language changes take effect after restarting Lidless."))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Button(L10n.tr("Show Setup Guide…")) { state.showOnboarding() }
             }
 
             Section {
-                LabeledContent("Status") {
+                LabeledContent(L10n.tr("Status")) {
                     HStack(spacing: 6) {
                         Image(systemName: state.usingHelper ? "checkmark.shield.fill" : "exclamationmark.shield")
                             .foregroundStyle(state.usingHelper ? .green : .orange)
-                        Text(state.usingHelper ? "Active" : "Using admin prompt")
+                        Text(L10n.tr(state.usingHelper ? "Active" : "Using admin prompt"))
                             .foregroundStyle(.secondary)
                     }
                 }
                 if !state.helperInstalled {
-                    Text("Install the background helper once so toggling never asks for your password and the watchdog can protect against a stuck-awake Mac.")
+                    Text(L10n.tr("Install the background helper once so toggling never asks for your password and the watchdog can protect against a stuck-awake Mac."))
                         .font(.callout)
                         .foregroundStyle(.secondary)
-                    Button(state.helperNeedsApproval ? "Open Login Items to approve…" : "Install background helper…") {
+                    Button(L10n.tr(state.helperNeedsApproval ? "Open Login Items to approve…" : "Install background helper…")) {
                         state.installHelper()
                     }
                 }
             } header: {
-                Text("Background helper")
+                Text(L10n.tr("Background helper"))
             }
 
             // The auto-off timer used to live here as a preference — set a
@@ -51,13 +63,13 @@ struct SettingsView: View {
             // concept, one place; a second entry point here would only be a
             // second thing to keep in step.
 
-            Section("Updates") {
-                Toggle("Check for updates automatically", isOn: $updater.automaticallyChecksForUpdates)
-                Button("Check for Updates…") { updater.checkForUpdates() }
+            Section(L10n.tr("Updates")) {
+                Toggle(L10n.tr("Check for updates automatically"), isOn: $updater.automaticallyChecksForUpdates)
+                Button(L10n.tr("Check for Updates…")) { updater.checkForUpdates() }
                     .disabled(!updater.canCheckForUpdates)
             }
 
-            Section("About") {
+            Section(L10n.tr("About")) {
                 HStack(spacing: 12) {
                     if let icon = NSApp.applicationIconImage {
                         Image(nsImage: icon)
@@ -66,15 +78,15 @@ struct SettingsView: View {
                     }
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Lidless").font(.headline)
-                        Text("Version \(state.appVersion)")
+                        Text(L10n.format("Version %@", state.appVersion))
                             .font(.callout)
                             .foregroundStyle(.secondary)
-                        Text("Created by Nghia Luong")
+                        Text(L10n.tr("Created by Nghia Luong"))
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     }
                 }
-                Link("View on GitHub", destination: repoURL)
+                Link(L10n.tr("View on GitHub"), destination: repoURL)
             }
         }
         .formStyle(.grouped)

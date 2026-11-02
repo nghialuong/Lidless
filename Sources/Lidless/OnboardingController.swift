@@ -26,7 +26,7 @@ final class OnboardingController {
             let root = OnboardingView().environmentObject(state)
             let hosting = NSHostingController(rootView: root)
             let win = NSWindow(contentViewController: hosting)
-            win.title = "Welcome to Lidless"
+            win.title = L10n.tr("Welcome to Lidless")
             win.styleMask = [.titled, .closable, .fullSizeContentView]
             win.titlebarAppearsTransparent = true
             win.isMovableByWindowBackground = true

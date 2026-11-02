@@ -38,10 +38,10 @@ public enum SafetyReason: Equatable {
 
     public var message: String {
         switch self {
-        case .highThermal:        return "Auto-paused: the Mac is running hot."
-        case .notCharging:        return "Auto-paused: not on charger."
-        case .lowBattery(let p):  return "Auto-paused: battery \(p)% on battery power."
-        case .notOnPower:         return "Auto-paused: not connected to power."
+        case .highThermal:        return L10n.tr("Auto-paused: the Mac is running hot.")
+        case .notCharging:        return L10n.tr("Auto-paused: not on charger.")
+        case .lowBattery(let p):  return L10n.format("Auto-paused: battery %d%% on battery power.", p)
+        case .notOnPower:         return L10n.tr("Auto-paused: not connected to power.")
         }
     }
 
@@ -49,10 +49,10 @@ public enum SafetyReason: Equatable {
     /// won't allow it (vs. `message`, which describes a background auto-pause).
     public var blockedMessage: String {
         switch self {
-        case .highThermal:        return "Your Mac is running hot, so keep-awake is paused. It'll be available again once the Mac cools down."
-        case .notCharging:        return "\u{201C}Only while charging\u{201D} is on, so connect your Mac to power to keep it awake."
-        case .lowBattery(let p):  return "Battery is at \(p)%. Charge above the low-battery cutoff to keep your Mac awake."
-        case .notOnPower:         return "Connect your Mac to power to keep it awake."
+        case .highThermal:        return L10n.tr("Your Mac is running hot, so keep-awake is paused. It'll be available again once the Mac cools down.")
+        case .notCharging:        return L10n.tr("\u{201C}Only while charging\u{201D} is on, so connect your Mac to power to keep it awake.")
+        case .lowBattery(let p):  return L10n.format("Battery is at %d%%. Charge above the low-battery cutoff to keep your Mac awake.", p)
+        case .notOnPower:         return L10n.tr("Connect your Mac to power to keep it awake.")
         }
     }
 
@@ -60,10 +60,10 @@ public enum SafetyReason: Equatable {
     /// to power"). Reflects the *current* unmet condition, not an auto-pause event.
     public var checkLabel: String {
         switch self {
-        case .highThermal:        return "Running hot"
-        case .notCharging:        return "Not on charger"
-        case .lowBattery(let p):  return "Battery \(p)% is at or below the cutoff"
-        case .notOnPower:         return "Not connected to power"
+        case .highThermal:        return L10n.tr("Running hot")
+        case .notCharging:        return L10n.tr("Not on charger")
+        case .lowBattery(let p):  return L10n.format("Battery %d%% is at or below the cutoff", p)
+        case .notOnPower:         return L10n.tr("Not connected to power")
         }
     }
 }
