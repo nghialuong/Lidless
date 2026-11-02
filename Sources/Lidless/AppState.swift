@@ -445,17 +445,17 @@ final class AppState: ObservableObject {
 
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
-        alert.messageText = "Background helper enabled"
-        alert.informativeText = "Restart Lidless to finish connecting to the background helper."
-        alert.addButton(withTitle: "Restart Now")
-        alert.addButton(withTitle: "Later")
+        alert.messageText = L10n.tr("Background helper enabled")
+        alert.informativeText = L10n.tr("Restart Lidless to finish connecting to the background helper.")
+        alert.addButton(withTitle: L10n.tr("Restart Now"))
+        alert.addButton(withTitle: L10n.tr("Later"))
         if alert.runModal() == .alertFirstButtonReturn {
             relaunch()
         }
     }
 
     /// Spawn a fresh instance of the app, then terminate this one.
-    private func relaunch() {
+    func relaunch() {
         let config = NSWorkspace.OpenConfiguration()
         config.createsNewApplicationInstance = true
         NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: config) { _, _ in }
@@ -478,7 +478,7 @@ final class AppState: ObservableObject {
             refreshHelperStatus()
             helperWasUsable = usingHelper
             if helper.requiresApproval {
-                lastError = "Approve Lidless in System Settings ▸ Login Items."
+                lastError = L10n.tr("Approve Lidless in System Settings ▸ Login Items.")
                 helper.openLoginItemsSettings()
             } else {
                 lastError = nil
@@ -498,7 +498,7 @@ final class AppState: ObservableObject {
     /// Kept separate from `installHelper()` so re-registration can never swallow
     /// the open.
     func openLoginItems() {
-        lastError = "Approve Lidless in System Settings ▸ Login Items."
+        lastError = L10n.tr("Approve Lidless in System Settings ▸ Login Items.")
         helper.openLoginItemsSettings()
         refreshHelperStatus()
     }
@@ -654,7 +654,7 @@ final class AppState: ObservableObject {
                     // The helper can fail without a message (e.g. a dropped XPC
                     // reply, or the daemon failing to launch after an update);
                     // surface it instead of letting the toggle silently no-op.
-                    let message = err ?? "The background helper didn’t respond."
+                    let message = err ?? L10n.tr("The background helper didn’t respond.")
                     self.lastError = message
                     if origin == .user { self.presentHelperFailureAlert(message: message) }
                     self.recoverStateAfterFailedWrite()
@@ -735,9 +735,9 @@ final class AppState: ObservableObject {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = target ? "Couldn’t keep your Mac awake" : "Couldn’t turn keep-awake off"
+        alert.messageText = target ? L10n.tr("Couldn’t keep your Mac awake") : L10n.tr("Couldn’t turn keep-awake off")
         alert.informativeText = message
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: L10n.tr("OK"))
         alert.runModal()
     }
 
@@ -749,10 +749,10 @@ final class AppState: ObservableObject {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Couldn’t keep your Mac awake"
-        alert.informativeText = "\(message)\n\nThis usually happens after an update. Reinstalling the background helper fixes it."
-        alert.addButton(withTitle: "Reinstall Helper…")
-        alert.addButton(withTitle: "Cancel")
+        alert.messageText = L10n.tr("Couldn’t keep your Mac awake")
+        alert.informativeText = L10n.format("%@\n\nThis usually happens after an update. Reinstalling the background helper fixes it.", message)
+        alert.addButton(withTitle: L10n.tr("Reinstall Helper…"))
+        alert.addButton(withTitle: L10n.tr("Cancel"))
         if alert.runModal() == .alertFirstButtonReturn {
             repairHelper()
         }
@@ -769,10 +769,10 @@ final class AppState: ObservableObject {
             if let error {
                 self.lastError = error.localizedDescription
             } else if self.helper.requiresApproval {
-                self.lastError = "Approve Lidless in System Settings ▸ Login Items, then try the switch again."
+                self.lastError = L10n.tr("Approve Lidless in System Settings ▸ Login Items, then try the switch again.")
                 self.helper.openLoginItemsSettings()
             } else {
-                self.lastError = "Background helper reinstalled — try the switch again."
+                self.lastError = L10n.tr("Background helper reinstalled — try the switch again.")
             }
         }
     }
@@ -824,7 +824,7 @@ final class AppState: ObservableObject {
             let minutes = autoOffMinutes
             cancelAutoOff()
             setEnabled(false,
-                       note: "Auto-off: \(AutoOff.optionLabel(minutes: minutes)) elapsed.",
+                       note: L10n.format("Auto-off: %@ elapsed.", AutoOff.optionLabel(minutes: minutes)),
                        origin: .autoOff)
         } else {
             refreshAutoOffRemaining()
@@ -864,6 +864,6 @@ final class AppState: ObservableObject {
         let info = battery.read()
         batteryPercent = info.percent
         batteryOnAC = info.onAC
-        batteryDescription = "\(info.source) · \(info.percent)%"
+        batteryDescription = L10n.format("%@ · %d%%", info.source, info.percent)
     }
 }

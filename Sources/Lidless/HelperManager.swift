@@ -88,8 +88,20 @@ final class HelperManager {
 
     func setKeepAwake(_ enabled: Bool, completion: @escaping (Bool, String?) -> Void) {
         callWithTimeout(completion: completion) { proxy, done in
-            proxy.setKeepAwake(enabled) { ok, err in done(ok, err) }
+            proxy.setKeepAwake(enabled) { ok, err in
+                done(ok, err.map(Self.localizedHelperError))
+            }
         }
+    }
+
+    /// The daemon sends stable English diagnostics over XPC; translate known
+    /// messages in the user's app process, where the selected language applies.
+    private static func localizedHelperError(_ message: String) -> String {
+        let prefix = "pmset exited "
+        if message.hasPrefix(prefix), let status = Int(message.dropFirst(prefix.count)) {
+            return L10n.format("pmset exited %d", status)
+        }
+        return L10n.tr(message)
     }
 
     // No `getState` wrapper: the helper's reply is a plain `Bool`, so a failed
@@ -126,11 +138,11 @@ final class HelperManager {
             }
         }
         guard let proxy = remote({ finish(false, $0) }) else {
-            finish(false, "No helper connection")
+            finish(false, L10n.tr("No helper connection"))
             return
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + timeout) {
-            finish(false, "The background helper isn’t responding.")
+            finish(false, L10n.tr("The background helper isn’t responding."))
         }
         body(proxy) { ok, err in finish(ok, err) }
     }

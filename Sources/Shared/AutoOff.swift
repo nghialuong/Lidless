@@ -40,7 +40,7 @@ public enum AutoOff {
 
     /// Label for the duration control, e.g. `No limit`, `15 min`, `1 hour`.
     public static func durationLabel(minutes: Int) -> String {
-        minutes > 0 ? optionLabel(minutes: minutes) : "No limit"
+        minutes > 0 ? optionLabel(minutes: minutes) : L10n.tr("No limit")
     }
 
     /// When a timer started `minutes` ago from `start` should fire.
@@ -71,8 +71,8 @@ public enum AutoOff {
 
     /// Menu label for a duration, e.g. `15 min`, `1 hour`, `2 hours`.
     public static func optionLabel(minutes: Int) -> String {
-        guard minutes % 60 == 0 else { return "\(minutes) min" }
+        guard minutes % 60 == 0 else { return L10n.format("%d min", minutes) }
         let h = minutes / 60
-        return h == 1 ? "1 hour" : "\(h) hours"
+        return h == 1 ? L10n.tr("1 hour") : L10n.format("%d hours", h)
     }
 }

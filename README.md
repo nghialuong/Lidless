@@ -13,6 +13,9 @@ so coding agents (Claude Code, Codex, etc.) keep working while you move around.
 </p>
 
 ## Features
+- **English and Simplified Chinese**, following the system language by default.
+  Choose a different language in Settings → Language, then restart Lidless to
+  apply it. This changes only Lidless's language preference.
 
 - One-click **keep awake with the lid closed** (menu bar toggle).
 - Privileged background **helper** (`SMAppService`) so toggling never asks for a password.

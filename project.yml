@@ -4,6 +4,8 @@ options:
   deploymentTarget:
     macOS: "13.0"
   createIntermediateGroups: true
+  developmentLanguage: en
+  knownRegions: [en, zh-Hans]
 
 settings:
   base:
@@ -24,6 +26,7 @@ targets:
       - Sources/Lidless
       - Sources/Shared
       - Resources/Assets.xcassets
+      - Resources/Localizations
     info:
       path: Sources/Lidless/Info.plist
       properties:

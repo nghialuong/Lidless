@@ -12,8 +12,8 @@ public enum ExternalChange: Equatable {
     /// flip the state back while this notice is still on screen.
     public var message: String {
         switch self {
-        case .enabledOutside:  return "Sleep prevention was turned on outside Lidless."
-        case .disabledOutside: return "Sleep prevention was turned off outside Lidless."
+        case .enabledOutside:  return L10n.tr("Sleep prevention was turned on outside Lidless.")
+        case .disabledOutside: return L10n.tr("Sleep prevention was turned off outside Lidless.")
         }
     }
 }
@@ -133,16 +133,16 @@ public enum StateReconciler {
     /// is restored sends a running Mac into a bag.
     public static func unverifiedMessage(target: Bool) -> String {
         target
-            ? "Couldn’t confirm keep-awake with the system — it may not hold when you close the lid."
-            : "Couldn’t confirm sleep was restored — your Mac may still stay awake."
+            ? L10n.tr("Couldn’t confirm keep-awake with the system — it may not hold when you close the lid.")
+            : L10n.tr("Couldn’t confirm sleep was restored — your Mac may still stay awake.")
     }
 
     /// Wording for a write that demonstrably didn't hold. Kept distinct from
     /// `ExternalChange.message`, which attributes the change to someone else.
     public static func writeMismatchMessage(actual: Bool) -> String {
         actual
-            ? "The change didn’t hold — the system reports keep-awake is on."
-            : "The change didn’t hold — the system reports keep-awake is off."
+            ? L10n.tr("The change didn’t hold — the system reports keep-awake is on.")
+            : L10n.tr("The change didn’t hold — the system reports keep-awake is off.")
     }
 }
 
