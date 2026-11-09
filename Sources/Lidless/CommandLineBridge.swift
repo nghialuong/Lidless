@@ -64,10 +64,21 @@ enum CommandLineToolInstaller {
 
     /// `/usr/local/bin` is root-owned on Apple Silicon, so this asks for the
     /// admin password, the same way `PowerManager` does without the helper.
+    ///
+    /// Checks the destination as the user first, so a conflict is reported
+    /// without a password prompt. The privileged run checks again itself:
+    /// anything can change between the two.
     static func install() throws {
+        try run("/bin/sh", LidlessCLI.installArguments(mode: "check",
+                                                     toolPath: bundledToolURL.path,
+                                                     owner: 0))
+        try run("/usr/bin/osascript", ["-e", LidlessCLI.installScript(toolPath: bundledToolURL.path)])
+    }
+
+    private static func run(_ path: String, _ arguments: [String]) throws {
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        proc.arguments = ["-e", LidlessCLI.installScript(toolPath: bundledToolURL.path)]
+        proc.executableURL = URL(fileURLWithPath: path)
+        proc.arguments = arguments
         let errPipe = Pipe()
         proc.standardError = errPipe
         proc.standardOutput = Pipe()

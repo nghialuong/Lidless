@@ -106,14 +106,72 @@ public enum LidlessCLI {
     /// Where Settings links the tool. On the user's `PATH` by default on macOS.
     public static let installPath = "/usr/local/bin/lidless"
 
-    /// AppleScript that links the bundled tool into `installPath` with an admin
-    /// prompt. The tool path comes from wherever the app happens to live, so it
-    /// is passed through `quoted form of` for the shell and escaped for the
-    /// AppleScript literal — a quote in a folder name must stay a character.
-    public static func installScript(toolPath: String) -> String {
-        "do shell script \"/bin/mkdir -p /usr/local/bin && /bin/ln -sf \" & quoted form of "
-            + appleScriptLiteral(toolPath)
-            + " & \" \(installPath)\" with administrator privileges"
+    /// The one program that places the link, run as `sh -c <program> lidless-install
+    /// <mode> <tool> <destination> <owner uid>`. `mode` is `check` (no writes, run
+    /// as the user before any password prompt) or `install`.
+    ///
+    /// It runs as root, so it trusts nothing it didn't check itself:
+    /// - The destination may only be absent, this tool's link already, or a link
+    ///   left by another copy of Lidless (`*/Lidless.app/Contents/Helpers/lidless`).
+    ///   A regular file, a directory, or any other link is refused, never replaced.
+    /// - The folder must be a real directory owned by `owner`. When that's root,
+    ///   it and every folder above it must be root-owned, writable by nobody
+    ///   else, and not links, so no one can swap in a directory or a link
+    ///   between the check and the write.
+    /// - `ln -sn` without `-f`: it neither follows a link at the destination nor
+    ///   overwrites anything that appeared since the check. `rm` without `-r`
+    ///   removes a stale link and can't take a directory with it.
+    public static let installProgram = """
+    set -eu
+    mode=$1 src=$2 dst=$3 owner=$4
+    dir=${dst%/*}
+    fail() { echo "$1" >&2; exit 1; }
+    checkdir() {
+      if [ ! -d "$1" ] || [ -L "$1" ]; then fail "$1 is not a plain folder."; fi
+      [ "$(/usr/bin/stat -f %u "$1")" = "$2" ] || fail "$1 isn't owned by the expected user."
+      case "$(/usr/bin/stat -f %Sp "$1")" in
+        ?????w????|????????w?) fail "$1 is writable by other users." ;;
+      esac
+    }
+    # Folders above first, so mkdir can't be steered through a link.
+    if [ "$owner" = 0 ]; then
+      up=${dir%/*}
+      while [ -n "$up" ]; do
+        if [ -e "$up" ] || [ -L "$up" ]; then checkdir "$up" 0; fi
+        up=${up%/*}
+      done
+    fi
+    if [ "$mode" = install ]; then /bin/mkdir -p "$dir"; fi
+    if [ -e "$dir" ] || [ -L "$dir" ]; then checkdir "$dir" "$owner"; fi
+    if [ -L "$dst" ]; then
+      cur=$(/usr/bin/readlink "$dst")
+      if [ "$cur" = "$src" ]; then exit 0; fi
+      case "$cur" in
+        */Lidless.app/Contents/Helpers/lidless) if [ "$mode" = install ]; then /bin/rm -- "$dst"; fi ;;
+        *) fail "$dst already links to $cur. Remove it first if you want Lidless to install there." ;;
+      esac
+    elif [ -e "$dst" ]; then
+      fail "$dst already exists. Remove it first if you want Lidless to install there."
+    fi
+    if [ "$mode" != install ]; then exit 0; fi
+    /bin/ln -sn "$src" "$dst"
+    if [ ! -L "$dst" ] || [ "$(/usr/bin/readlink "$dst")" != "$src" ]; then fail "Couldn't create $dst."; fi
+    """
+
+    /// Arguments for running `installProgram` directly with `/bin/sh`.
+    public static func installArguments(mode: String, toolPath: String,
+                                        destination: String = installPath, owner: UInt32) -> [String] {
+        ["-c", installProgram, "lidless-install", mode, toolPath, destination, String(owner)]
+    }
+
+    /// AppleScript that runs `installProgram` as root with an admin prompt.
+    /// Every argument goes through `quoted form of` for the shell and is escaped
+    /// for the AppleScript literal, so a quote in a folder name stays a character.
+    public static func installScript(toolPath: String, destination: String = installPath) -> String {
+        "do shell script \"/bin/sh -c \" & quoted form of " + appleScriptLiteral(installProgram)
+            + " & \" lidless-install install \" & quoted form of " + appleScriptLiteral(toolPath)
+            + " & \" \" & quoted form of " + appleScriptLiteral(destination)
+            + " & \" 0\" with administrator privileges"
     }
 
     /// A string as an AppleScript string literal, quotes included.
