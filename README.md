@@ -19,6 +19,7 @@ so coding agents (Claude Code, Codex, etc.) keep working while you move around.
 - **Watchdog**: if the app crashes or is force-quit, the helper auto-restores normal sleep — the Mac can't get stuck awake.
 - **Safety guards**: pause when running hot, only-while-charging, and a low-battery cutoff.
 - **Auto-off timer**: optionally turn keep-awake off after 15 min – 4 hours, with a live countdown.
+- **Command-line tool**: `lidless status` and `lidless off`, so a script or coding agent can let the Mac sleep when its work is done. Install it from Settings ▸ Command-line tool.
 - **Automatic updates** via [Sparkle](https://sparkle-project.org) — EdDSA-signed appcast, notarized DMGs.
 - **Launch at login**, and a clean menu with battery/power status.
 
@@ -36,6 +37,7 @@ runs a heartbeat watchdog. If the app stops checking in (>90s), the helper resto
 - **`Lidless`** — SwiftUI `MenuBarExtra` app (macOS 13+), not sandboxed, `LSUIElement`.
 - **`LidlessHelper`** — root LaunchDaemon, registered via `SMAppService`, serves `LidlessHelperProtocol` over XPC. Embedded at `Contents/MacOS/LidlessHelper` with its plist in `Contents/Library/LaunchDaemons/`.
 - **`Sources/Shared`** — pure, unit-tested logic: pmset parsers, watchdog, safety evaluator, settings.
+- **`lidless`** — command-line tool embedded at `Contents/Helpers/lidless`. `off` posts a distributed notification that the app handles like the menu-bar switch, so auto mode is disarmed too. There is no `on`: that notification carries no sender identity, so it can only ever let the Mac sleep.
 
 ## Build (no Xcode GUI needed)
 

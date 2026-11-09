@@ -56,6 +56,11 @@ targets:
       - target: LidlessHelper
         copy:
           destination: executables
+      # `lidless` command-line tool. Settings links it into /usr/local/bin.
+      - target: LidlessCLI
+        copy:
+          destination: wrapper
+          subpath: Contents/Helpers
       - package: Sparkle
         product: Sparkle
     postBuildScripts:
@@ -83,6 +88,25 @@ targets:
           </dict>
           </plist>' > "$PLIST"
           plutil -lint "$PLIST"
+
+  LidlessCLI:
+    type: tool
+    platform: macOS
+    sources:
+      - Sources/CLI
+      - Sources/Shared
+      - Sources/Lidless/Shell.swift
+    settings:
+      base:
+        PRODUCT_NAME: lidless
+        ENABLE_HARDENED_RUNTIME: YES
+        # Embedded in the app bundle; see the same setting on LidlessHelper.
+        SKIP_INSTALL: YES
+      configs:
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: com.nghialuong.lidless.dev.cli
+        Release:
+          PRODUCT_BUNDLE_IDENTIFIER: com.nghialuong.lidless.cli
 
   LidlessHelper:
     type: tool
@@ -143,6 +167,7 @@ schemes:
       targets:
         Lidless: all
         LidlessHelper: all
+        LidlessCLI: all
         LidlessTests: [test]
     test:
       targets:

@@ -44,6 +44,23 @@ struct SettingsView: View {
                 Text("Background helper")
             }
 
+            Section {
+                LabeledContent("Status") {
+                    Text(state.commandLineToolInstalled ? "Installed" : "Not installed")
+                        .foregroundStyle(.secondary)
+                }
+                Text("`lidless status` and `lidless off` let a script or coding agent check keep-awake and turn it off when its work is done.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                if !state.commandLineToolInstalled {
+                    Button("Install `lidless` in \(LidlessCLI.installPath)…") {
+                        state.installCommandLineTool()
+                    }
+                }
+            } header: {
+                Text("Command-line tool")
+            }
+
             // The auto-off timer used to live here as a preference — set a
             // duration, then separately remember to flip the switch. It's now a
             // "Keep awake for…" control in the popover next to the toggle it
