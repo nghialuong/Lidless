@@ -66,6 +66,9 @@ final class AppState: ObservableObject {
     /// Whether the user has finished first-run onboarding (persisted).
     @Published var onboardingComplete = false
 
+    /// Whether `/usr/local/bin/lidless` links to this app's bundled tool.
+    @Published var commandLineToolInstalled = false
+
     private let helper = HelperManager()
     /// Reads the flag on every path — `pmset -g` needs no privileges — and also
     /// writes it when the helper isn't installed.
@@ -112,6 +115,7 @@ final class AppState: ObservableObject {
     /// True while the onboarding window is open and not yet completed.
     private var onboardingActive = false
     private var didBecomeActiveObserver: NSObjectProtocol?
+    private var commandLineBridge: CommandLineBridge?
 
     init() {
         settings = store.load()
@@ -150,6 +154,13 @@ final class AppState: ObservableObject {
                 // helper unusable→usable transition.
                 self?.refreshState()
             }
+        }
+        commandLineToolInstalled = CommandLineToolInstaller.isInstalled
+        commandLineBridge = CommandLineBridge(
+            appBundleID: Bundle.main.bundleIdentifier ?? "com.nghialuong.lidless"
+        ) { [weak self] reply in
+            guard let self else { return reply(false, "Lidless is shutting down.") }
+            self.stopFromCommandLine(reply: reply)
         }
         // First launch shows onboarding once (persisted so closing it early won't
         // re-nag). A relaunch triggered mid-onboarding resumes the flow instead.
@@ -191,6 +202,50 @@ final class AppState: ObservableObject {
     /// Present the Settings window from the menu-bar popover.
     func showSettings() {
         settingsWindow.show()
+    }
+
+    // MARK: Command-line tool
+
+    /// `lidless off`. Goes through the master toggle, not a bare write, so auto
+    /// mode is disarmed too — otherwise its next reconcile would turn keep-awake
+    /// straight back on.
+    ///
+    /// Reads the flag first: if it was set behind the app's back, the UI still
+    /// shows off, and auto mode would see nothing to undo. Adopting the real
+    /// state before disarming makes the switch's own write clear it.
+    ///
+    /// Replies only once both halves hold — the flag reads back 0 and auto mode
+    /// is disarmed — because the helper's write is asynchronous and the tool
+    /// must not report off while keep-awake can still come back.
+    func stopFromCommandLine(reply: @escaping (Bool, String?) -> Void) {
+        refreshState()
+        setMasterToggle(false)
+        confirmStopped(deadline: Date().addingTimeInterval(LidlessCLI.appConfirmTimeout),
+                       reply: reply)
+    }
+
+    private func confirmStopped(deadline: Date, reply: @escaping (Bool, String?) -> Void) {
+        let disarmed = !(settings.autoEnableWhenCharging && armed)
+        if disarmed, power.isSleepDisabled() == false {
+            return reply(true, nil)
+        }
+        guard Date() < deadline else {
+            return reply(false, lastError ?? "Keep-awake didn't read back as off in time.")
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self else { return reply(false, "Lidless is shutting down.") }
+            self.confirmStopped(deadline: deadline, reply: reply)
+        }
+    }
+
+    func installCommandLineTool() {
+        do {
+            try CommandLineToolInstaller.install()
+            lastError = nil
+        } catch {
+            lastError = error.localizedDescription
+        }
+        commandLineToolInstalled = CommandLineToolInstaller.isInstalled
     }
 
     func updateSettings(_ new: SafetySettings) {
