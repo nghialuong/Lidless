@@ -158,8 +158,9 @@ final class AppState: ObservableObject {
         commandLineToolInstalled = CommandLineToolInstaller.isInstalled
         commandLineBridge = CommandLineBridge(
             appBundleID: Bundle.main.bundleIdentifier ?? "com.nghialuong.lidless"
-        ) { [weak self] in
-            self?.stopFromCommandLine()
+        ) { [weak self] reply in
+            guard let self else { return reply(false, "Lidless is shutting down.") }
+            self.stopFromCommandLine(reply: reply)
         }
         // First launch shows onboarding once (persisted so closing it early won't
         // re-nag). A relaunch triggered mid-onboarding resumes the flow instead.
@@ -212,9 +213,29 @@ final class AppState: ObservableObject {
     /// Reads the flag first: if it was set behind the app's back, the UI still
     /// shows off, and auto mode would see nothing to undo. Adopting the real
     /// state before disarming makes the switch's own write clear it.
-    func stopFromCommandLine() {
+    ///
+    /// Replies only once both halves hold — the flag reads back 0 and auto mode
+    /// is disarmed — because the helper's write is asynchronous and the tool
+    /// must not report off while keep-awake can still come back.
+    func stopFromCommandLine(reply: @escaping (Bool, String?) -> Void) {
         refreshState()
         setMasterToggle(false)
+        confirmStopped(deadline: Date().addingTimeInterval(LidlessCLI.appConfirmTimeout),
+                       reply: reply)
+    }
+
+    private func confirmStopped(deadline: Date, reply: @escaping (Bool, String?) -> Void) {
+        let disarmed = !(settings.autoEnableWhenCharging && armed)
+        if disarmed, power.isSleepDisabled() == false {
+            return reply(true, nil)
+        }
+        guard Date() < deadline else {
+            return reply(false, lastError ?? "Keep-awake didn't read back as off in time.")
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self else { return reply(false, "Lidless is shutting down.") }
+            self.confirmStopped(deadline: deadline, reply: reply)
+        }
     }
 
     func installCommandLineTool() {

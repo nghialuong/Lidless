@@ -10,8 +10,7 @@ let appBundleID = "com.nghialuong.lidless.dev"
 let appBundleID = "com.nghialuong.lidless"
 #endif
 
-/// Long enough for the admin prompt the app falls back to without the helper.
-let offTimeout: TimeInterval = 30
+let center = DistributedNotificationCenter.default()
 
 let usage = """
 Usage: lidless [status|off]
@@ -69,20 +68,42 @@ func off() -> Never {
         }
     }
 
-    DistributedNotificationCenter.default().postNotificationName(
+    let requestID = UUID().uuidString
+    var ack: LidlessCLI.StopAck?
+    let observer = center.addObserver(
+        forName: Notification.Name(LidlessCLI.stoppedNotificationName(appBundleID: appBundleID)),
+        object: nil, queue: nil
+    ) { note in
+        if ack == nil { ack = LidlessCLI.StopAck(userInfo: note.userInfo, requestID: requestID) }
+    }
+    center.postNotificationName(
         Notification.Name(LidlessCLI.stopNotificationName(appBundleID: appBundleID)),
-        object: nil, userInfo: nil, deliverImmediately: true
+        object: nil,
+        userInfo: [LidlessCLI.UserInfoKey.requestID: requestID],
+        deliverImmediately: true
     )
 
-    let deadline = Date().addingTimeInterval(offTimeout)
+    let deadline = Date().addingTimeInterval(LidlessCLI.toolTimeout)
     while Date() < deadline {
-        if readFlag() == false {
+        // Distributed notifications arrive through the run loop.
+        RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        guard ack != nil else { continue }
+        let settings = store?.load()
+        switch LidlessCLI.offOutcome(ack: ack,
+                                     flag: readFlag(),
+                                     autoMode: settings?.autoEnableWhenCharging ?? false,
+                                     armed: store?.loadArmed() ?? false) {
+        case .done:
+            center.removeObserver(observer)
             print("Keep awake is off.")
             exit(0)
+        case .failed(let message):
+            fail(message)
+        case .waiting:
+            continue
         }
-        Thread.sleep(forTimeInterval: 0.25)
     }
-    fail("Lidless didn't confirm keep-awake off within \(Int(offTimeout))s. Check the Lidless menu for an error.")
+    fail("Lidless didn't reply within \(Int(LidlessCLI.toolTimeout))s, so keep-awake may still come back on. Check the Lidless menu.")
 }
 
 switch LidlessCLI.parse(Array(CommandLine.arguments.dropFirst())) {

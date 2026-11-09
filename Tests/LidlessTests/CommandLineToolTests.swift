@@ -39,4 +39,49 @@ final class CommandLineToolTests: XCTestCase {
         XCTAssertTrue(script.contains(#"quoted form of "/Users/me/Apps \"x\" \\ & rm -rf ~/Lidless.app/Contents/Helpers/lidless""#))
         XCTAssertTrue(script.hasSuffix(#" \#(LidlessCLI.installPath)" with administrator privileges"#))
     }
+
+    // MARK: When `lidless off` may report success
+
+    private let ok = LidlessCLI.StopAck(ok: true, message: nil)
+
+    /// Auto mode armed but paused (unplugged): the flag already reads 0. With no
+    /// reply the app hasn't disarmed, and plugging in would turn keep-awake back
+    /// on — so this must keep waiting, not report off.
+    func testAlreadyOffButArmedWithUnresponsiveAppIsNotDone() {
+        XCTAssertEqual(LidlessCLI.offOutcome(ack: nil, flag: false, autoMode: true, armed: true), .waiting)
+        XCTAssertEqual(LidlessCLI.offOutcome(ack: nil, flag: false, autoMode: false, armed: false), .waiting)
+    }
+
+    func testDoneNeedsReplyFlagOffAndDisarmed() {
+        XCTAssertEqual(LidlessCLI.offOutcome(ack: ok, flag: false, autoMode: true, armed: false), .done)
+        XCTAssertEqual(LidlessCLI.offOutcome(ack: ok, flag: false, autoMode: false, armed: true), .done)
+    }
+
+    /// Any process can post the reply, so the tool checks the facts itself.
+    func testReplyIsNotTakenOnTrust() {
+        guard case .failed = LidlessCLI.offOutcome(ack: ok, flag: true, autoMode: false, armed: false) else {
+            return XCTFail("flag still 1")
+        }
+        guard case .failed = LidlessCLI.offOutcome(ack: ok, flag: nil, autoMode: false, armed: false) else {
+            return XCTFail("flag unreadable")
+        }
+        guard case .failed = LidlessCLI.offOutcome(ack: ok, flag: false, autoMode: true, armed: true) else {
+            return XCTFail("still armed")
+        }
+    }
+
+    func testFailedReplyCarriesTheAppsReason() {
+        let ack = LidlessCLI.StopAck(ok: false, message: "Authorization cancelled.")
+        XCTAssertEqual(LidlessCLI.offOutcome(ack: ack, flag: true, autoMode: false, armed: false),
+                       .failed("Authorization cancelled."))
+    }
+
+    /// Two agents running `lidless off` at once must each wait for their own reply.
+    func testReplyToAnotherRequestIsIgnored() {
+        let info: [AnyHashable: Any] = [LidlessCLI.UserInfoKey.requestID: "A",
+                                        LidlessCLI.UserInfoKey.ok: true]
+        XCTAssertNil(LidlessCLI.StopAck(userInfo: info, requestID: "B"))
+        XCTAssertEqual(LidlessCLI.StopAck(userInfo: info, requestID: "A"), ok)
+        XCTAssertNil(LidlessCLI.StopAck(userInfo: [LidlessCLI.UserInfoKey.requestID: "A"], requestID: "A"))
+    }
 }

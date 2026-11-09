@@ -39,6 +39,70 @@ public enum LidlessCLI {
         "\(appBundleID).cli.stop"
     }
 
+    /// The app's reply to one stop request: posted once the switch is off,
+    /// auto mode is disarmed and the flag reads back 0, or once it gives up.
+    public static func stoppedNotificationName(appBundleID: String) -> String {
+        "\(appBundleID).cli.stopped"
+    }
+
+    public enum UserInfoKey {
+        public static let requestID = "requestID"
+        public static let ok = "ok"
+        public static let message = "message"
+    }
+
+    /// How long the app keeps trying to confirm before replying with a failure.
+    /// Long enough for the admin prompt it falls back to without the helper.
+    public static let appConfirmTimeout: TimeInterval = 25
+    /// How long the tool waits for that reply. Longer than the app's, so a slow
+    /// failure still arrives as a reason rather than a bare timeout.
+    public static let toolTimeout: TimeInterval = 30
+
+    public struct StopAck: Equatable {
+        public let ok: Bool
+        public let message: String?
+
+        public init(ok: Bool, message: String?) {
+            self.ok = ok
+            self.message = message
+        }
+
+        /// The reply to *this* request, or nil. A reply to another invocation —
+        /// two agents running `lidless off` at once — mustn't settle this one.
+        public init?(userInfo: [AnyHashable: Any]?, requestID: String) {
+            guard let info = userInfo,
+                  info[UserInfoKey.requestID] as? String == requestID,
+                  let ok = info[UserInfoKey.ok] as? Bool else { return nil }
+            self.init(ok: ok, message: info[UserInfoKey.message] as? String)
+        }
+    }
+
+    public enum OffOutcome: Equatable {
+        case done
+        case waiting
+        case failed(String)
+    }
+
+    /// Whether `lidless off` may report success.
+    ///
+    /// The flag reading 0 is not enough on its own. Auto mode can be armed but
+    /// paused (unplugged, low battery), with the flag already 0: reporting off
+    /// then, before the app has disarmed, leaves keep-awake to come back on the
+    /// moment the charger goes in. So success needs the app's reply to this
+    /// request, and the tool re-checks both facts itself rather than taking the
+    /// reply's word, since any process can post it.
+    public static func offOutcome(ack: StopAck?, flag: Bool?, autoMode: Bool, armed: Bool) -> OffOutcome {
+        guard let ack else { return .waiting }
+        guard ack.ok else { return .failed(ack.message ?? "Lidless couldn't turn keep-awake off.") }
+        guard flag == false else {
+            return .failed("Lidless replied, but SleepDisabled is \(flag == true ? "still 1" : "unreadable").")
+        }
+        guard !(autoMode && armed) else {
+            return .failed("Lidless replied, but \"Automatically enable when charging\" is still armed.")
+        }
+        return .done
+    }
+
     /// Where Settings links the tool. On the user's `PATH` by default on macOS.
     public static let installPath = "/usr/local/bin/lidless"
 

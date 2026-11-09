@@ -1,14 +1,18 @@
 import Foundation
 
-/// Hears `lidless off` and hands it to the app's own switch.
+/// Hears `lidless off`, hands it to the app's own switch, and replies once the
+/// outcome is known.
 ///
 /// Registered with `.deliverImmediately`: a menu-bar app is almost never the
 /// active app, and the default suspension behaviour would hold the request until
 /// the user next clicked the menu — long after the script that sent it gave up.
 final class CommandLineBridge: NSObject {
-    private let onStop: @MainActor () -> Void
+    private let appBundleID: String
+    private let onStop: @MainActor (_ reply: @escaping (Bool, String?) -> Void) -> Void
 
-    init(appBundleID: String, onStop: @escaping @MainActor () -> Void) {
+    init(appBundleID: String,
+         onStop: @escaping @MainActor (_ reply: @escaping (Bool, String?) -> Void) -> Void) {
+        self.appBundleID = appBundleID
         self.onStop = onStop
         super.init()
         DistributedNotificationCenter.default().addObserver(
@@ -25,7 +29,21 @@ final class CommandLineBridge: NSObject {
     }
 
     @objc private func stopRequested(_ notification: Notification) {
-        Task { @MainActor in self.onStop() }
+        // A request without an id has no tool waiting on a reply, but it is still
+        // a request to stop.
+        let requestID = notification.userInfo?[LidlessCLI.UserInfoKey.requestID] as? String
+        Task { @MainActor in
+            self.onStop { [appBundleID] ok, message in
+                guard let requestID else { return }
+                var info: [String: Any] = [LidlessCLI.UserInfoKey.requestID: requestID,
+                                           LidlessCLI.UserInfoKey.ok: ok]
+                if let message { info[LidlessCLI.UserInfoKey.message] = message }
+                DistributedNotificationCenter.default().postNotificationName(
+                    Notification.Name(LidlessCLI.stoppedNotificationName(appBundleID: appBundleID)),
+                    object: nil, userInfo: info, deliverImmediately: true
+                )
+            }
+        }
     }
 }
 
