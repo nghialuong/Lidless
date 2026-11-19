@@ -28,6 +28,11 @@ final class AppState: ObservableObject {
     /// User-tunable safety preferences (persisted).
     @Published var settings: SafetySettings = .default
 
+    /// Whether to turn the display off after the lid closes while keep-awake is
+    /// active. Defaults to false so existing installs keep their current display
+    /// behaviour.
+    @Published var displaySleepOnLidClose = false
+
     /// Auto-mode master-toggle intent (persisted): whether the user wants
     /// keep-awake armed. In auto mode the *live* state (`isEnabled`) is derived
     /// from `armed` gated by power + safety — see `reconcile()`. Unused in manual
@@ -70,6 +75,7 @@ final class AppState: ObservableObject {
     /// Reads the flag on every path — `pmset -g` needs no privileges — and also
     /// writes it when the helper isn't installed.
     private let power = PowerManager()
+    private let displaySleep = DisplaySleepManager()
     private let battery = BatteryMonitor()
     private let store = SettingsStore()
     private let loginItem = LoginItemManager()
@@ -112,9 +118,13 @@ final class AppState: ObservableObject {
     /// True while the onboarding window is open and not yet completed.
     private var onboardingActive = false
     private var didBecomeActiveObserver: NSObjectProtocol?
+    private var clamshellMonitor: ClamshellMonitor?
+    private var displaySleepWork: DispatchWorkItem?
+    private var displaySleepRequest = 0
 
     init() {
         settings = store.load()
+        displaySleepOnLidClose = store.loadDisplaySleepOnLidClose()
         armed = store.loadArmed()
         autoOffMinutes = store.loadAutoOffMinutes()
         onboardingComplete = store.loadOnboardingComplete()
@@ -161,9 +171,17 @@ final class AppState: ObservableObject {
             store.saveOnboardingComplete(true)
             DispatchQueue.main.async { [weak self] in self?.showOnboarding() }
         }
+
+        clamshellMonitor = ClamshellMonitor { [weak self] closed in
+            self?.handleClamshellChange(closed: closed)
+        }
+        if isEnabled, displaySleepOnLidClose {
+            scheduleDisplaySleep()
+        }
     }
 
     deinit {
+        displaySleepWork?.cancel()
         if let didBecomeActiveObserver {
             NotificationCenter.default.removeObserver(didBecomeActiveObserver)
         }
@@ -242,6 +260,16 @@ final class AppState: ObservableObject {
             // and keep-awake is currently on.
             if wasAuto, isEnabled { armAutoOff() }
             evaluateSafety()
+        }
+    }
+
+    func setDisplaySleepOnLidClose(_ enabled: Bool) {
+        displaySleepOnLidClose = enabled
+        store.saveDisplaySleepOnLidClose(enabled)
+        if enabled, isEnabled {
+            scheduleDisplaySleep()
+        } else if !enabled {
+            cancelDisplaySleep()
         }
     }
 
@@ -571,6 +599,7 @@ final class AppState: ObservableObject {
     /// auto-off timer or restart the heartbeat on every pass.
     private func adoptSystemState(_ enabled: Bool) {
         isEnabled = enabled
+        handleKeepAwakeStateChange(enabled)
         sync.beginMutation()            // supersede every read and write still in flight
         manageHeartbeat()
         updateAutoOff(for: enabled)
@@ -643,6 +672,7 @@ final class AppState: ObservableObject {
                 guard let self, self.sync.shouldApply(token) else { return }   // superseded write
                 if ok {
                     self.isEnabled = target
+                    self.handleKeepAwakeStateChange(target)
                     self.lastError = resultMessage
                     self.manageHeartbeat()
                     self.updateAutoOff(for: target)
@@ -664,6 +694,7 @@ final class AppState: ObservableObject {
             do {
                 try power.setSleepDisabled(target)
                 isEnabled = target
+                handleKeepAwakeStateChange(target)
                 lastError = resultMessage
                 updateAutoOff(for: target)
                 pendingVerification = PendingVerification(target: target)
@@ -787,6 +818,58 @@ final class AppState: ObservableObject {
         heartbeatTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.helper.heartbeat() }
         }
+    }
+
+    // MARK: Display sleep
+
+    private func handleKeepAwakeStateChange(_ enabled: Bool) {
+        if enabled, displaySleepOnLidClose {
+            scheduleDisplaySleep()
+        } else if !enabled {
+            cancelDisplaySleep()
+        }
+    }
+
+    private func handleClamshellChange(closed: Bool) {
+        if closed {
+            scheduleDisplaySleep()
+        } else {
+            cancelDisplaySleep()
+        }
+    }
+
+    private func scheduleDisplaySleep() {
+        guard displaySleepOnLidClose,
+              isEnabled
+        else {
+            cancelDisplaySleep()
+            return
+        }
+        displaySleepWork?.cancel()
+        displaySleepRequest += 1
+        let request = displaySleepRequest
+        let work = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.displaySleepRequest == request,
+                  self.displaySleepOnLidClose,
+                  self.isEnabled,
+                  self.clamshellMonitor?.isClosed == true
+            else { return }
+
+            do {
+                try self.displaySleep.sleepNow()
+            } catch {
+                self.lastError = error.localizedDescription
+            }
+        }
+        displaySleepWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
+    }
+
+    private func cancelDisplaySleep() {
+        displaySleepRequest += 1
+        displaySleepWork?.cancel()
+        displaySleepWork = nil
     }
 
     // MARK: Auto-off timer

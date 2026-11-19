@@ -15,6 +15,7 @@ so coding agents (Claude Code, Codex, etc.) keep working while you move around.
 ## Features
 
 - One-click **keep awake with the lid closed** (menu bar toggle).
+- Optional **display sleep on lid close** while keep-awake is active.
 - Privileged background **helper** (`SMAppService`) so toggling never asks for a password.
 - **Watchdog**: if the app crashes or is force-quit, the helper auto-restores normal sleep — the Mac can't get stuck awake.
 - **Safety guards**: pause when running hot, only-while-charging, and a low-battery cutoff.
@@ -30,6 +31,9 @@ is the `SleepDisabled` flag in `IOPMrootDomain` (what `sudo pmset -a disableslee
 
 The app talks to a root helper over XPC; the helper flips the flag with no admin prompt and
 runs a heartbeat watchdog. If the app stops checking in (>90s), the helper restores sleep.
+When the display-sleep option is enabled, the app listens for the clamshell-close event and
+uses `pmset displaysleepnow` after the transition settles. This is independent of the
+system-sleep flag and is off by default.
 
 ## Architecture
 

@@ -2,11 +2,11 @@ import SwiftUI
 
 /// The Settings window. Holds the secondary controls and the detailed
 /// explanations that used to clutter the menu bar popover: launch at login,
-/// background-helper setup, the auto-off timer, and About/GitHub.
+/// display behaviour, background-helper setup, the auto-off timer, and About/GitHub.
 struct SettingsView: View {
     /// Fixed size of the window this view lives in — the view isn't resizable,
     /// so `SettingsWindowController` sizes the window from the same constant.
-    static let preferredSize = CGSize(width: 420, height: 460)
+    static let preferredSize = CGSize(width: 420, height: 520)
 
     @EnvironmentObject var state: AppState
     @EnvironmentObject var updater: UpdaterController
@@ -21,6 +21,16 @@ struct SettingsView: View {
                     set: { state.setLaunchAtLogin($0) }
                 ))
                 Button("Show Setup Guide…") { state.showOnboarding() }
+            }
+
+            Section("Display") {
+                Toggle("Turn off display when lid closes", isOn: Binding(
+                    get: { state.displaySleepOnLidClose },
+                    set: { state.setDisplaySleepOnLidClose($0) }
+                ))
+                Text("When enabled, Lidless turns off the display after the lid closes while keep-awake is active.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
 
             Section {
