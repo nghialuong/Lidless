@@ -13,6 +13,7 @@ public struct SettingsStore {
         static let armed        = "keepAwakeArmed"
         static let seeded       = "settingsSeeded"
         static let autoOff      = "autoOffMinutes"
+        static let displaySleepOnLidClose = "displaySleepOnLidClose"
         static let onboarded    = "onboardingComplete"
         static let resumeOnboarding = "resumeOnboarding"
         static let helperBuild  = "lastRegisteredHelperBuild"
@@ -57,6 +58,16 @@ public struct SettingsStore {
 
     public func saveAutoOffMinutes(_ minutes: Int) {
         defaults.set(minutes, forKey: Key.autoOff)
+    }
+
+    /// Whether Lidless should turn the display off after a lid-close transition
+    /// while keep-awake is active. Defaults to false for existing installs.
+    public func loadDisplaySleepOnLidClose() -> Bool {
+        defaults.bool(forKey: Key.displaySleepOnLidClose)
+    }
+
+    public func saveDisplaySleepOnLidClose(_ enabled: Bool) {
+        defaults.set(enabled, forKey: Key.displaySleepOnLidClose)
     }
 
     /// Whether the user has been through first-run onboarding. Defaults to false.

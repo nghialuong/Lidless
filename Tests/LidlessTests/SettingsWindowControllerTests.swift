@@ -71,7 +71,7 @@ final class SettingsWindowControllerTests: XCTestCase {
         XCTAssertEqual(window.title, "Lidless Settings")
         XCTAssertTrue(window.styleMask.contains(.titled))
         XCTAssertTrue(window.styleMask.contains(.closable))
-        // SettingsView pins its own 420x460 frame, so the window must not resize.
+        // The controller must preserve the content size supplied by its caller.
         XCTAssertFalse(window.styleMask.contains(.resizable))
         // Required for reuse: a released window would dangle after the user closes it.
         XCTAssertFalse(window.isReleasedWhenClosed)

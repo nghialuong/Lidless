@@ -218,4 +218,22 @@ final class SharedLogicTests: XCTestCase {
         store.saveOnboardingComplete(true)
         XCTAssertTrue(SettingsStore(defaults: defaults).loadOnboardingComplete())
     }
+
+    func testDisplaySleepOnLidCloseDefaultsToOff() {
+        let suite = "lidless.test.display-sleep.default"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        XCTAssertFalse(SettingsStore(defaults: defaults).loadDisplaySleepOnLidClose())
+        defaults.removePersistentDomain(forName: suite)
+    }
+
+    func testDisplaySleepOnLidClosePersists() {
+        let suite = "lidless.test.display-sleep.persist"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        let store = SettingsStore(defaults: defaults)
+        store.saveDisplaySleepOnLidClose(true)
+        XCTAssertTrue(SettingsStore(defaults: defaults).loadDisplaySleepOnLidClose())
+        defaults.removePersistentDomain(forName: suite)
+    }
 }
