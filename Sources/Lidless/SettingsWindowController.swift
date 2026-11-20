@@ -57,22 +57,9 @@ final class SettingsWindowController {
             window = win
         }
 
-        if #available(macOS 14.0, *) {
-            // `ignoringOtherApps:` is deprecated here, and since Sonoma macOS
-            // declines to activate an accessory app through it anyway.
-            NSApplication.shared.activate()
-        } else {
-            NSApplication.shared.activate(ignoringOtherApps: true)
+        if let window {
+            ForegroundWindowActivation.present(window)
         }
-
-        // Activation alone doesn't reliably front the window for an accessory
-        // app, so order it front regardless of whether we won activation, then
-        // take key separately. `makeKeyAndOrderFront` does neither dependably
-        // here. Taking key isn't guaranteed either — without activation the
-        // window may never become key — which is why dismissing the menu-bar
-        // popover is `MenuBarExtraPanel`'s job rather than a side effect of this.
-        window?.orderFrontRegardless()
-        window?.makeKey()
     }
 
     func close() {

@@ -17,6 +17,8 @@ final class OnboardingController {
         self.state = state
     }
 
+    var isVisible: Bool { window?.isVisible == true }
+
     /// Show the window, building it on first use and reusing it afterwards so we
     /// never stack duplicates.
     func show() {
@@ -31,13 +33,17 @@ final class OnboardingController {
             win.titlebarAppearsTransparent = true
             win.isMovableByWindowBackground = true
             win.isReleasedWhenClosed = false
+            win.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+            win.hidesOnDeactivate = false
+            win.setContentSize(CGSize(width: 460, height: 560))
             win.center()
             window = win
         }
 
-        NSApp.activate(ignoringOtherApps: true)
-        window?.makeKeyAndOrderFront(nil)
-        window?.center()
+        if let window {
+            window.center()
+            ForegroundWindowActivation.present(window)
+        }
     }
 
     func close() {

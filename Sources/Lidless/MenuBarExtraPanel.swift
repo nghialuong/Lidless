@@ -58,9 +58,18 @@ enum MenuBarExtraPanel {
                   button.state != .off  // clicking a closed popover would open it
             else { continue }
 
-            button.performClick(button)
-            button.isHighlighted = button.state != .off
-            return
+            // On macOS 27+, SwiftUI's MenuBarExtra status button may have no
+            // target/action wired; only rely on `performClick` when an action
+            // exists and actually closes the panel.
+            if button.action != nil {
+                button.performClick(button)
+                button.isHighlighted = button.state != .off
+                if let index = panelWindowIndex(classNames: windows.map(\.className)),
+                   windows[index].isVisible {
+                    windows[index].close()
+                }
+                return
+            }
         }
 
         // If that shape ever changes, close the panel directly. The icon stays
