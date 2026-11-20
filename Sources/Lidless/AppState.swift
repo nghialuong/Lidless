@@ -79,6 +79,14 @@ final class AppState: ObservableObject {
     /// settings window controller below can hand it to `SettingsView`.
     let updater = UpdaterController()
 
+    private lazy var mainWindow = MainWindowController { [weak self] in
+        guard let self else { return AnyView(EmptyView()) }
+        return AnyView(
+            MenuContent()
+                .environmentObject(self)
+        )
+    }
+
     private lazy var settingsWindow = SettingsWindowController(
         contentSize: SettingsView.preferredSize
     ) { [weak self] in
@@ -111,6 +119,8 @@ final class AppState: ObservableObject {
     private var sync = StateSync()
     /// True while the onboarding window is open and not yet completed.
     private var onboardingActive = false
+    /// True when this launch queued the onboarding window automatically.
+    private(set) var willShowOnboardingOnLaunch = false
     private var didBecomeActiveObserver: NSObjectProtocol?
 
     init() {
@@ -155,10 +165,12 @@ final class AppState: ObservableObject {
         // re-nag). A relaunch triggered mid-onboarding resumes the flow instead.
         if store.loadResumeOnboarding() {
             store.saveResumeOnboarding(false)
+            willShowOnboardingOnLaunch = true
             DispatchQueue.main.async { [weak self] in self?.showOnboarding() }
         } else if !onboardingComplete {
             onboardingComplete = true
             store.saveOnboardingComplete(true)
+            willShowOnboardingOnLaunch = true
             DispatchQueue.main.async { [weak self] in self?.showOnboarding() }
         }
     }
@@ -186,9 +198,26 @@ final class AppState: ObservableObject {
         onboarding.close()
     }
 
-    // MARK: Settings
+    // MARK: Foreground control window & Settings
 
-    /// Present the Settings window from the menu-bar popover.
+    /// Present the primary Lidless control window in the foreground.
+    func showMainWindow() {
+        refreshHelperStatus()
+        refreshState()
+        refreshBattery()
+        mainWindow.show()
+    }
+
+    /// Surface an already-open setup window, or open the main control window.
+    func presentForegroundUI() {
+        if onboarding.isVisible {
+            onboarding.show()
+        } else {
+            showMainWindow()
+        }
+    }
+
+    /// Present the Settings window from the menu-bar popover or main window.
     func showSettings() {
         settingsWindow.show()
     }
@@ -443,7 +472,7 @@ final class AppState: ObservableObject {
         // If this happened mid-onboarding, resume the flow after the relaunch.
         if onboardingActive { store.saveResumeOnboarding(true) }
 
-        NSApp.activate(ignoringOtherApps: true)
+        ForegroundWindowActivation.activateApp()
         let alert = NSAlert()
         alert.messageText = "Background helper enabled"
         alert.informativeText = "Restart Lidless to finish connecting to the background helper."
@@ -732,7 +761,7 @@ final class AppState: ObservableObject {
     /// reason is impossible to miss. The inline `lastError` note still persists in
     /// the popover after the alert is dismissed.
     private func presentFailureAlert(target: Bool, message: String) {
-        NSApp.activate(ignoringOtherApps: true)
+        ForegroundWindowActivation.activateApp()
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = target ? "Couldn’t keep your Mac awake" : "Couldn’t turn keep-awake off"
@@ -746,7 +775,7 @@ final class AppState: ObservableObject {
     /// binary). Offer a one-click reinstall, which re-registers and refreshes
     /// that record.
     private func presentHelperFailureAlert(message: String) {
-        NSApp.activate(ignoringOtherApps: true)
+        ForegroundWindowActivation.activateApp()
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Couldn’t keep your Mac awake"

@@ -122,6 +122,8 @@ targets:
       - Sources/Shared
       # Depend only on AppKit/SwiftUI, so they compile straight into the test
       # bundle — which can't link the app target (Sparkle).
+      - Sources/Lidless/ForegroundWindowActivation.swift
+      - Sources/Lidless/MainWindowController.swift
       - Sources/Lidless/SettingsWindowController.swift
       - Sources/Lidless/MenuBarExtraPanel.swift
     settings:
